@@ -74,6 +74,18 @@ export interface ZoteroFulltext {
   totalPages?: number;
 }
 
+export interface ZoteroAnnotationData {
+  annotationType?: string;
+  annotationText?: string;
+  annotationComment?: string;
+  annotationPageLabel?: string;
+  annotationColor?: string;
+  annotationSortIndex?: string;
+  annotationPosition?: string;
+  parentItem?: string;
+  [key: string]: unknown;
+}
+
 export interface AttachmentInfo {
   key: string;
   title: string;

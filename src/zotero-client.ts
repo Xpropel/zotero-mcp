@@ -19,11 +19,14 @@ const webKey = process.env.ZOTERO_API_KEY || "";
 const webLibId = process.env.ZOTERO_LIBRARY_ID || "";
 const webLibType = process.env.ZOTERO_LIBRARY_TYPE || "user";
 
-export const hasWebApi = () => !!(webKey && webLibId);
+export function hasWebApi(): boolean {
+  return !!(webKey && webLibId);
+}
 
 export function setActiveLibrary(id: string, type: string): void {
   activeLib = { libraryId: id, libraryType: type };
 }
+
 export function clearActiveLibrary(): void {
   activeLib = { libraryId: "0", libraryType: "user" };
 }
@@ -32,6 +35,7 @@ function localBase(): string {
   const prefix = activeLib.libraryType === "group" ? "groups" : "users";
   return `${LOCAL}/api/${prefix}/${activeLib.libraryId}`;
 }
+
 function webBase(): string {
   const prefix = webLibType === "group" ? "groups" : "users";
   return `${WEB}/${prefix}/${webLibId}`;
@@ -60,11 +64,13 @@ async function localGet<T>(path: string, params?: Record<string, string>): Promi
   return data as T;
 }
 
-const webHeaders = () => ({
-  "Content-Type": "application/json",
-  "Zotero-API-Key": webKey,
-  "Zotero-API-Version": "3",
-});
+function webHeaders(): Record<string, string> {
+  return {
+    "Content-Type": "application/json",
+    "Zotero-API-Key": webKey,
+    "Zotero-API-Version": "3",
+  };
+}
 
 async function webPost(path: string, body: unknown): Promise<unknown> {
   if (!hasWebApi()) throw new Error("Zotero Web API not configured (set ZOTERO_API_KEY + ZOTERO_LIBRARY_ID)");
@@ -80,16 +86,16 @@ async function webPost(path: string, body: unknown): Promise<unknown> {
   return res.headers.get("content-type")?.includes("json") ? res.json() : {};
 }
 
-async function webPut(path: string, body: unknown, version: number): Promise<void> {
+async function webPatch(path: string, body: unknown, version: number): Promise<void> {
   if (!hasWebApi()) throw new Error("Zotero Web API not configured (set ZOTERO_API_KEY + ZOTERO_LIBRARY_ID)");
   const res = await fetchT(`${webBase()}${path}`, {
-    method: "PUT",
+    method: "PATCH",
     headers: { ...webHeaders(), "If-Unmodified-Since-Version": String(version) },
     body: JSON.stringify(body),
   });
   if (!res.ok) {
     const t = await res.text().catch(() => "");
-    throw new Error(`Zotero Web API PUT ${res.status}: ${t || res.statusText}`);
+    throw new Error(`Zotero Web API PATCH ${res.status}: ${t || res.statusText}`);
   }
 }
 
@@ -135,8 +141,9 @@ export async function searchItems(
   return localGet<ZoteroItem[]>("/items", p);
 }
 
-export const getItem = (key: string) =>
-  localGet<ZoteroItem>(`/items/${encodeURIComponent(key)}`);
+export async function getItem(key: string): Promise<ZoteroItem> {
+  return localGet<ZoteroItem>(`/items/${encodeURIComponent(key)}`);
+}
 
 export async function getItems(opts: {
   limit?: number; start?: number; sort?: string; direction?: string; itemType?: string;
@@ -150,8 +157,9 @@ export async function getItems(opts: {
   return localGet<ZoteroItem[]>("/items", p);
 }
 
-export const getItemChildren = (key: string) =>
-  localGet<ZoteroItem[]>(`/items/${encodeURIComponent(key)}/children`);
+export async function getItemChildren(key: string): Promise<ZoteroItem[]> {
+  return localGet<ZoteroItem[]>(`/items/${encodeURIComponent(key)}/children`);
+}
 
 export async function getItemFulltext(key: string): Promise<ZoteroFulltext | null> {
   try { return await localGet<ZoteroFulltext>(`/items/${encodeURIComponent(key)}/fulltext`); }
@@ -160,23 +168,27 @@ export async function getItemFulltext(key: string): Promise<ZoteroFulltext | nul
 
 // ── Read: collections / tags ──
 
-export const getCollections = (limit?: number) =>
-  localGet<ZoteroCollection[]>("/collections", limit !== undefined ? { limit: String(limit) } : {});
+export async function getCollections(limit?: number): Promise<ZoteroCollection[]> {
+  return localGet<ZoteroCollection[]>("/collections", limit !== undefined ? { limit: String(limit) } : {});
+}
 
-export const getCollection = (key: string) =>
-  localGet<ZoteroCollection>(`/collections/${encodeURIComponent(key)}`);
+export async function getCollection(key: string): Promise<ZoteroCollection> {
+  return localGet<ZoteroCollection>(`/collections/${encodeURIComponent(key)}`);
+}
 
-export const getCollectionItems = (key: string, limit?: number) =>
-  localGet<ZoteroItem[]>(
+export async function getCollectionItems(key: string, limit?: number): Promise<ZoteroItem[]> {
+  return localGet<ZoteroItem[]>(
     `/collections/${encodeURIComponent(key)}/items`,
     limit !== undefined ? { limit: String(limit) } : {}
   );
+}
 
-export const getTags = (limit?: number) =>
-  localGet<Array<{ tag: string; meta: { numItems: number } }>>(
+export async function getTags(limit?: number): Promise<Array<{ tag: string; meta: { numItems: number } }>> {
+  return localGet<Array<{ tag: string; meta: { numItems: number } }>>(
     "/tags",
     limit !== undefined ? { limit: String(limit) } : {}
   );
+}
 
 // ── Attachments ──
 
@@ -211,7 +223,6 @@ export async function createItemNote(parentKey: string, noteHtml: string, tags: 
 
   if (hasWebApi()) return extractCreatedKey(await webPost("/items", [noteData]));
 
-  // Connector fallback (standalone note)
   const res = await fetchT(`${LOCAL}/connector/saveItems`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -240,7 +251,8 @@ export async function createAnnotationItem(attachmentKey: string, annotation: Re
 export async function updateItem(item: ZoteroItem): Promise<void> {
   const path = `/items/${encodeURIComponent(item.key)}`;
   const current = await webGet<ZoteroItem>(path);
-  await webPut(path, { ...item.data, version: current.version }, current.version);
+  const { version: _v, ...dataWithoutVersion } = item.data;
+  await webPatch(path, dataWithoutVersion, current.version);
 }
 
 // ── Better BibTeX ──
@@ -264,8 +276,10 @@ async function bbtRpc<T>(method: string, params: unknown[]): Promise<T | null> {
   }
 }
 
-export const betterBibtexExport = (key: string) =>
-  bbtRpc<string>("item.export", [[key], "betterbibtex"]);
+export async function betterBibtexExport(key: string): Promise<string | null> {
+  return bbtRpc<string>("item.export", [[key], "betterbibtex"]);
+}
 
-export const betterBibtexGetAnnotations = (key: string) =>
-  bbtRpc<unknown[]>("item.annotations", [[key]]);
+export async function betterBibtexGetAnnotations(key: string): Promise<unknown[] | null> {
+  return bbtRpc<unknown[]>("item.annotations", [[key]]);
+}

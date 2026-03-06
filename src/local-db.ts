@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import { copyFileSync, mkdtempSync, unlinkSync, rmdirSync, existsSync } from "node:fs";
+import { copyFileSync, mkdtempSync, unlinkSync, rmdirSync, existsSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { findZoteroDb } from "./utils.js";
@@ -7,10 +7,36 @@ import type { LibraryInfo, FeedInfo, FeedItem } from "./types.js";
 
 let _db: Database.Database | null = null;
 let _tmpDir: string | null = null;
+let _srcMtimeMs = 0;
+
+const STALE_THRESHOLD_MS = 30_000;
+
+function refreshIfStale(): void {
+  if (!_db) return;
+  try {
+    const src = findZoteroDb();
+    const currentMtime = statSync(src).mtimeMs;
+    if (currentMtime > _srcMtimeMs + STALE_THRESHOLD_MS) {
+      _db.close();
+      _db = null;
+    }
+  } catch { /* source disappeared — keep existing copy */ }
+}
 
 function getDb(): Database.Database {
+  refreshIfStale();
   if (!_db) {
     const src = findZoteroDb();
+    _srcMtimeMs = statSync(src).mtimeMs;
+
+    if (_tmpDir) {
+      try {
+        const old = join(_tmpDir, "zotero.sqlite");
+        if (existsSync(old)) unlinkSync(old);
+        rmdirSync(_tmpDir);
+      } catch { /* best effort */ }
+    }
+
     _tmpDir = mkdtempSync(join(tmpdir(), "zotero-mcp-"));
     const dst = join(_tmpDir, "zotero.sqlite");
     copyFileSync(src, dst);
