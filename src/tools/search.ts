@@ -1,38 +1,53 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import * as zot from "../zotero-client.js";
-import { ok, fail, fmtList } from "../formatters.js";
+import { ok, fail, fmtSearchList } from "../formatters.js";
 
 export function registerSearchTools(server: McpServer): void {
   server.tool(
-    "zotero_search_items",
-    "Search for items in your Zotero library. Supports keyword search, tag filtering, or both combined.",
+    "zotero_search",
+    "Search Zotero library. Returns a lean list with PDF/TXT availability indicators. " +
+      "Use sort=dateAdded for recent items. Use zotero_item to get full details for a specific result.",
     {
-      query: z.string().default("").describe("Search keyword (empty string to browse/filter by tag only)"),
-      qmode: z.enum(["titleCreatorYear", "everything"]).default("titleCreatorYear").describe("Query mode"),
-      item_type: z.string().default("-attachment").describe("Item type filter"),
-      limit: z.number().default(10).describe("Max results"),
-      tag: z.array(z.string()).optional().describe("Tag filters"),
+      query: z.string().optional().describe("Search keyword (omit to browse all / filter by tag or collection)"),
+      tag: z.array(z.string()).optional().describe("Filter by tags (OR logic: matches any)"),
+      collection_key: z.string().optional().describe("Limit to a specific collection"),
+      sort: z.enum(["dateAdded", "dateModified", "title"]).default("dateAdded").describe("Sort order"),
+      limit: z.number().default(20).describe("Max results"),
     },
-    async ({ query, qmode, item_type, limit, tag }) => {
+    async ({ query, tag, collection_key, sort, limit }) => {
       try {
-        const items = await zot.searchItems(query, { qmode, itemType: item_type, limit, tag });
-        const title = tag?.length
-          ? `Search Results for '${query}' (tags: ${tag.join(", ")})`
-          : `Search Results for '${query}'`;
-        return ok(fmtList(items, title));
-      } catch (e) { return fail(e); }
-    }
-  );
+        let items: Awaited<ReturnType<typeof zot.searchItems>>;
 
-  server.tool(
-    "zotero_get_recent",
-    "Get recently added items.",
-    { limit: z.number().default(10).describe("Max results") },
-    async ({ limit }) => {
-      try {
-        const items = await zot.getItems({ limit, sort: "dateAdded", direction: "desc", itemType: "-attachment" });
-        return ok(fmtList(items, "Recently Added Items"));
+        if (collection_key) {
+          items = await zot.getCollectionItems(collection_key, limit);
+        } else if (query) {
+          items = await zot.searchItems(query, {
+            qmode: "everything",
+            itemType: "-attachment",
+            limit,
+            tag,
+            sort,
+            direction: "desc",
+          });
+        } else {
+          items = await zot.getItems({
+            limit,
+            sort,
+            direction: "desc",
+            itemType: "-attachment",
+          });
+        }
+
+        const title = query
+          ? `Search: "${query}"${tag?.length ? ` (tags: ${tag.join(", ")})` : ""}`
+          : collection_key
+            ? "Collection Items"
+            : sort === "dateAdded"
+              ? "Recent Items"
+              : "Items";
+
+        return ok(fmtSearchList(items, title));
       } catch (e) { return fail(e); }
     }
   );

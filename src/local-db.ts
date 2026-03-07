@@ -3,7 +3,7 @@ import { copyFileSync, mkdtempSync, unlinkSync, rmdirSync, existsSync, statSync 
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { findZoteroDb } from "./utils.js";
-import type { LibraryInfo, FeedInfo, FeedItem } from "./types.js";
+import type { LibraryInfo, FeedInfo, FeedItem, AttachmentRow } from "./types.js";
 
 let _db: Database.Database | null = null;
 let _tmpDir: string | null = null;
@@ -87,6 +87,26 @@ export function getFeeds(): FeedInfo[] {
        FROM feeds f ORDER BY f.name`
     )
     .all() as FeedInfo[];
+}
+
+export function getAttachmentsForParents(parentKeys: string[]): AttachmentRow[] {
+  if (!parentKeys.length) return [];
+  const placeholders = parentKeys.map(() => "?").join(",");
+  return getDb()
+    .prepare(
+      `SELECT pi.key as parentKey, i.key as attachmentKey,
+              ia.contentType, ia.path
+       FROM items i
+       JOIN itemAttachments ia ON ia.itemID = i.itemID
+       JOIN items pi ON ia.parentItemID = pi.itemID
+       WHERE pi.key IN (${placeholders})
+         AND ia.contentType IS NOT NULL
+       ORDER BY
+         CASE WHEN ia.contentType = 'application/pdf' THEN 0
+              WHEN ia.contentType LIKE 'text/html%' THEN 1
+              ELSE 2 END`
+    )
+    .all(...parentKeys) as AttachmentRow[];
 }
 
 export function getFeedItems(libraryId: number, limit = 20): FeedItem[] {

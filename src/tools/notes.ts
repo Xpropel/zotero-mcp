@@ -6,61 +6,42 @@ import { ok, fail, fmtNotes } from "../formatters.js";
 
 export function registerNoteTools(server: McpServer): void {
   server.tool(
-    "zotero_get_notes",
-    "Get notes for a specific item or all notes.",
-    {
-      item_key: z.string().optional().describe("Item key (omit for all notes)"),
-      limit: z.number().default(20),
-    },
-    async ({ item_key, limit }) => {
-      try {
-        const notes = item_key
-          ? (await zot.getItemChildren(item_key)).filter((c) => c.data.itemType === "note")
-          : await zot.getItems({ limit, itemType: "note" });
-        return ok(fmtNotes(notes, "Notes", limit));
-      } catch (e) { return fail(e); }
-    }
-  );
-
-  server.tool(
     "zotero_search_notes",
-    "Search through notes content.",
+    "Search through note contents across the library. Useful to check if a paper has already been summarized.",
     {
       query: z.string().describe("Search query"),
-      limit: z.number().default(20),
+      limit: z.number().default(20).describe("Max results"),
     },
     async ({ query, limit }) => {
       try {
         const items = await zot.searchItems(query, { qmode: "everything", itemType: "note", limit });
-        return ok(fmtNotes(items, `Note Search: '${query}'`, limit));
+        return ok(fmtNotes(items, `Note Search: "${query}"`, limit));
       } catch (e) { return fail(e); }
     }
   );
 
   server.tool(
     "zotero_create_note",
-    "Create a new note for a Zotero item. With Web API configured, creates a proper child note; otherwise uses Zotero connector.",
+    "Create a note for a Zotero item. Use this after reading a paper (via PaddleOCR) to save your summary back to Zotero.",
     {
       item_key: z.string().describe("Parent item key"),
-      note_title: z.string().describe("Note title"),
-      note_text: z.string().describe("Note content (plain text or HTML)"),
+      content: z.string().describe("Note content (plain text or HTML)"),
       tags: z.array(z.string()).optional().describe("Tags for the note"),
     },
-    async ({ item_key, note_title, note_text, tags }) => {
+    async ({ item_key, content, tags }) => {
       try {
         const parent = await zot.getItem(item_key);
 
-        const html = note_text.includes("<p>") || note_text.includes("<div>")
-          ? note_text
-          : note_text.split("\n\n").map((p) => `<p>${escapeHtml(p).replace(/\n/g, "<br/>")}</p>`).join("");
-        const safeTitle = escapeHtml(note_title.trim());
-        const body = safeTitle ? `<h1>${safeTitle}</h1>${html}` : html;
+        const html = content.includes("<p>") || content.includes("<div>")
+          ? content
+          : content.split("\n\n").map((p) => `<p>${escapeHtml(p).replace(/\n/g, "<br/>")}</p>`).join("");
 
-        const result = await zot.createItemNote(item_key, body, tags ?? []);
-        const via = zot.hasWebApi() ? "Web API (child note)" : "Connector (standalone)";
+        const result = await zot.createItemNote(item_key, html, tags ?? []);
+        const via = zot.hasWebApi() ? "Web API" : "Connector";
         return ok(
-          `Note "${note_title}" created for "${parent.data.title || item_key}"\nMethod: ${via}` +
-          (result !== "created-via-connector" ? `\nNote key: ${result}` : "")
+          `Note created for "${parent.data.title || item_key}"\n` +
+          `**Method:** ${via}` +
+          (result !== "created-via-connector" ? `\n**Note key:** ${result}` : "")
         );
       } catch (e) { return fail(e); }
     }

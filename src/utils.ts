@@ -1,7 +1,7 @@
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { existsSync, readdirSync } from "node:fs";
-import type { ZoteroCreator } from "./types.js";
+import { join, basename, extname, dirname } from "node:path";
+import { existsSync, readdirSync, statSync } from "node:fs";
+import type { ZoteroCreator, ItemFiles } from "./types.js";
 
 export function formatCreators(creators: ZoteroCreator[]): string {
   if (!creators?.length) return "No authors listed";
@@ -115,4 +115,52 @@ export function truncate(text: string, maxLen: number): string {
 
 export function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+export function getStorageDir(attachmentKey: string): string {
+  return join(findZoteroDataDir(), "storage", attachmentKey);
+}
+
+export function resolveItemFiles(attachmentKey: string, storagePath?: string): ItemFiles {
+  const dir = getStorageDir(attachmentKey);
+  if (!existsSync(dir)) return { hasPdf: false, hasTxt: false };
+
+  let pdfPath: string | undefined;
+  let txtPath: string | undefined;
+  let txtSize: number | undefined;
+
+  try {
+    const files = readdirSync(dir);
+
+    if (storagePath?.startsWith("storage:")) {
+      const resolved = join(dir, storagePath.slice("storage:".length));
+      if (existsSync(resolved)) pdfPath = resolved;
+    }
+    if (!pdfPath) {
+      const pdf = files.find((f) => f.toLowerCase().endsWith(".pdf"));
+      if (pdf) pdfPath = join(dir, pdf);
+    }
+
+    const txt = files.find((f) => f.toLowerCase().endsWith(".txt"));
+    if (txt) {
+      txtPath = join(dir, txt);
+      try { txtSize = statSync(txtPath).size; } catch { /* ignore */ }
+    }
+  } catch { /* dir unreadable */ }
+
+  return {
+    hasPdf: !!pdfPath,
+    hasTxt: !!txtPath,
+    pdfPath,
+    txtPath,
+    txtSize,
+  };
+}
+
+export function suggestTxtFilename(pdfPath: string): string {
+  return basename(pdfPath, extname(pdfPath)) + ".txt";
+}
+
+export function pdfDirFromPath(pdfPath: string): string {
+  return dirname(pdfPath);
 }

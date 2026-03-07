@@ -136,3 +136,18 @@ export interface ActiveLibrary {
   libraryId: string;
   libraryType: string;
 }
+
+export interface AttachmentRow {
+  parentKey: string;
+  attachmentKey: string;
+  contentType: string;
+  path: string | null;
+}
+
+export interface ItemFiles {
+  hasPdf: boolean;
+  hasTxt: boolean;
+  pdfPath?: string;
+  txtPath?: string;
+  txtSize?: number;
+}

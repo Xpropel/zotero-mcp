@@ -4,21 +4,20 @@ A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that c
 
 ## Features
 
-- **Search** — keyword search with optional tag filtering
-- **Metadata** — view item details in Markdown or BibTeX, with PDF path included
-- **PDF Path** — get absolute file path for use with external OCR tools (e.g. PaddleOCR-VL)
-- **Notes** — read, search, and create notes on items
-- **Annotations** — read highlights/comments; create new annotations via Web API
-- **Collections & Tags** — browse collection trees, list/update tags in batch
-- **Libraries** — list user/group/feed libraries; switch active library
-- **RSS Feeds** — list subscriptions and browse feed items
+- **Search** — keyword search with tag/collection filtering, sorted by date or title
+- **Item Details** — get metadata, abstract, PDF/TXT paths, notes, and annotations in one call
+- **TXT Caching** — save OCR-converted text alongside PDFs for future reuse
+- **Notes** — search and create notes on items
+- **Collections & Tags** — browse collection trees, list/batch-update tags
+- **BibTeX Export** — export items as BibTeX (via Better BibTeX or built-in fallback)
+- **Libraries & Feeds** — list/switch libraries, browse RSS feed items
 
 ## Prerequisites
 
 - **Zotero 7** (or 6) running locally with the default API server on port `23119`
 - **Node.js** ≥ 18
 - *(Optional)* [Better BibTeX](https://retorque.re/zotero-better-bibtex/) plugin for enhanced BibTeX export and annotation retrieval
-- *(Optional)* Zotero Web API credentials for write operations (create notes, annotations, update tags)
+- *(Optional)* Zotero Web API credentials for write operations (create notes, batch tag updates)
 
 ## Installation
 
@@ -53,7 +52,7 @@ Set `ZOTERO_DATA_DIR` if your data directory is in a non-standard location.
 
 ### MCP Client Configuration
 
-Add to your MCP client config (e.g. Claude Desktop, Cursor):
+Add to your MCP client config (e.g. Claude Desktop, Claude Code, Cursor):
 
 ```json
 {
@@ -83,50 +82,48 @@ For development with auto-reload:
 }
 ```
 
-## Available Tools (17)
+## Available Tools (11)
 
-### Search (2)
-
-| Tool | Description |
-|---|---|
-| `zotero_search_items` | Search by keyword and/or tag filters |
-| `zotero_get_recent` | Get recently added items |
-
-### Metadata & Content (6)
+### Search (1)
 
 | Tool | Description |
 |---|---|
-| `zotero_get_item_metadata` | Get item details (Markdown or BibTeX), includes PDF path |
-| `zotero_get_item_pdfpath` | Get absolute PDF file path for external tools (e.g. PaddleOCR-VL) |
-| `zotero_get_item_children` | List attachments and notes for an item |
-| `zotero_get_collections` | Browse collection hierarchy |
-| `zotero_get_collection_items` | List items in a collection |
-| `zotero_get_tags` | List all tags sorted by usage |
+| `zotero_search` | Search by keyword, tag, or collection. Supports sorting by `dateAdded`, `dateModified`, or `title`. Returns a lean list with PDF/TXT availability indicators. |
 
-### Notes
+### Item Details (2)
 
 | Tool | Description |
 |---|---|
-| `zotero_get_notes` | Get notes for an item or all notes |
-| `zotero_search_notes` | Full-text search through notes |
-| `zotero_create_note` | Create a note on an item (Web API or Connector) |
+| `zotero_item` | Get comprehensive details for an item in one call: metadata, abstract, PDF/TXT file paths, existing notes, and annotations. |
+| `zotero_save_txt` | Save PaddleOCR-converted text alongside the PDF in Zotero storage for future reuse. |
 
-### Annotations
-
-| Tool | Description |
-|---|---|
-| `zotero_get_annotations` | Get highlights/comments for an item |
-| `zotero_create_annotation` | Create a highlight annotation (requires Web API) |
-
-### Library Management
+### Notes (2)
 
 | Tool | Description |
 |---|---|
-| `zotero_list_libraries` | List all accessible libraries |
-| `zotero_switch_library` | Switch active library context |
-| `zotero_list_feeds` | List RSS feed subscriptions |
-| `zotero_get_feed_items` | Browse items from an RSS feed |
-| `zotero_batch_update_tags` | Batch add/remove tags (Web API or preview) |
+| `zotero_search_notes` | Full-text search through note contents across the library. |
+| `zotero_create_note` | Create a note on an item (via Web API or local Connector). |
+
+### Organization (3)
+
+| Tool | Description |
+|---|---|
+| `zotero_collections` | List all collections as a tree, or get items within a specific collection. |
+| `zotero_tags` | List all tags sorted by usage count. |
+| `zotero_batch_tags` | Batch add or remove tags on items matching a search query. |
+
+### Export (1)
+
+| Tool | Description |
+|---|---|
+| `zotero_export` | Export one or more items as BibTeX. Supports bulk export. |
+
+### Library Management (2)
+
+| Tool | Description |
+|---|---|
+| `zotero_libraries` | List all accessible libraries and RSS feeds, or switch the active library. |
+| `zotero_feeds` | Get items from a specific RSS feed. |
 
 ## Architecture
 
@@ -141,17 +138,18 @@ src/
 ├── bibtex.ts           # BibTeX generation (Better BibTeX or fallback)
 ├── formatters.ts       # Output formatting for tool responses
 └── tools/
-    ├── search.ts       # Search tools
-    ├── metadata.ts     # Metadata & content tools
-    ├── notes.ts        # Note tools
-    ├── annotations.ts  # Annotation tools
-    └── library.ts      # Library management tools
+    ├── search.ts       # zotero_search
+    ├── item.ts         # zotero_item, zotero_save_txt
+    ├── notes.ts        # zotero_search_notes, zotero_create_note
+    ├── organize.ts     # zotero_collections, zotero_tags, zotero_batch_tags
+    ├── export.ts       # zotero_export
+    └── library.ts      # zotero_libraries, zotero_feeds
 ```
 
 ### Data Access Layers
 
 1. **Local Zotero API** (`localhost:23119`) — primary read channel, no auth needed
-2. **Zotero Web API** (`api.zotero.org`) — write operations (notes, annotations, tag updates)
+2. **Zotero Web API** (`api.zotero.org`) — write operations (notes, tag updates)
 3. **SQLite direct read** (`better-sqlite3`) — library/feed metadata; auto-refreshes when source changes
 
 ## Scripts
