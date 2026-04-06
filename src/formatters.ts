@@ -25,6 +25,7 @@ export function fail(e: unknown): ToolResult {
 function fileTag(files: ItemFiles): string {
   const parts: string[] = [];
   if (files.hasPdf) parts.push("📄PDF");
+  if (files.hasMd) parts.push("📘MD");
   if (files.hasTxt) parts.push("📝TXT");
   if (!parts.length) return "⚠️无附件";
   return parts.join(" ");
@@ -36,6 +37,30 @@ function shortAuthors(creators?: Array<{ firstName?: string; lastName?: string; 
   const name = first.lastName || first.name || "Unknown";
   return creators.length > 2 ? `${name} et al.` : creators.length === 2
     ? `${name}, ${creators[1].lastName || creators[1].name || ""}` : name;
+}
+
+// ── Suggested next actions ──
+
+export function suggestNext(context: string): string {
+  const hints: Record<string, string> = {
+    search:
+      "**suggested_next:** `zotero_item` 查看详情 → `zotero_fulltext` 读取全文 → `zotero_ocr` 转换 PDF",
+    item:
+      "**suggested_next:** `zotero_fulltext` 读取全文 → `zotero_create_note` 保存笔记 → `zotero_export` 导出 BibTeX",
+    item_no_ocr:
+      "**suggested_next:** `zotero_ocr` 转换 PDF → `zotero_fulltext` 读取全文 → `zotero_create_note` 保存笔记",
+    ocr:
+      "**suggested_next:** `zotero_fulltext` 读取全文 → `zotero_create_note` 保存笔记",
+    note_created:
+      "**suggested_next:** `zotero_search_notes` 搜索笔记 → `zotero_export` 导出 BibTeX → `zotero_batch_tags` 批量打标签",
+    export:
+      "**suggested_next:** `zotero_search` 查找更多文献 → `zotero_batch_tags` 整理标签",
+    import:
+      "**suggested_next:** `zotero_item` 查看导入结果 → `zotero_ocr` 转换 PDF → `zotero_manage_collections` 整理到文件夹",
+    fulltext:
+      "**suggested_next:** `zotero_create_note` 保存阅读笔记 → `zotero_export` 导出 BibTeX",
+  };
+  return hints[context] || "";
 }
 
 // ── Lean search result format (no abstracts, with file indicators) ──
@@ -54,11 +79,12 @@ export function fmtSearchList(items: ZoteroItem[], title: string): string {
   const lines = [`# ${title} (${items.length} results)`, ""];
   for (let i = 0; i < items.length; i++) {
     const d = items[i].data;
-    const files = fileMap.get(items[i].key) ?? { hasPdf: false, hasTxt: false };
+    const files = fileMap.get(items[i].key) ?? { hasPdf: false, hasTxt: false, hasMd: false };
     lines.push(`${i + 1}. ${d.title || "Untitled"} [${items[i].key}] ${fileTag(files)}`);
     lines.push(`   ${shortAuthors(d.creators)} · ${d.date || "n.d."} · ${d.itemType}`);
     lines.push("");
   }
+  lines.push(suggestNext("search"));
   return lines.join("\n");
 }
 
@@ -68,6 +94,8 @@ export interface ComprehensiveData {
   pdfPath?: string;
   txtPath?: string;
   txtSize?: number;
+  mdPath?: string;
+  mdSize?: number;
   pdfFilename?: string;
   notes: ZoteroItem[];
   annotations: Array<ZoteroAnnotationData & { key?: string }>;
@@ -122,12 +150,27 @@ export function fmtComprehensiveItem(item: ZoteroItem, extra: ComprehensiveData)
   } else {
     lines.push("📄 **PDF:** Not found");
   }
+
+  let hasReadableText = false;
+
+  if (extra.mdPath) {
+    const sizeKB = extra.mdSize ? ` (${(extra.mdSize / 1024).toFixed(1)} KB)` : "";
+    lines.push(`📘 **Markdown:** ${extra.mdPath}${sizeKB}`);
+    lines.push("→ 全文已转换为 Markdown，可直接读取（保留标题、表格等结构）");
+    hasReadableText = true;
+  }
+
   if (extra.txtPath) {
     const sizeKB = extra.txtSize ? ` (${(extra.txtSize / 1024).toFixed(1)} KB)` : "";
     lines.push(`📝 **TXT:** ${extra.txtPath}${sizeKB}`);
-    lines.push("→ 全文已转换，可直接读取 TXT 文件，无需调用 PaddleOCR");
-  } else if (extra.pdfPath) {
-    lines.push("📝 **TXT:** 尚未转换 — 可通过 PaddleOCR 转换后用 zotero_save_txt 保存");
+    if (!hasReadableText) {
+      lines.push("→ 全文已转换，可直接读取 TXT 文件");
+      hasReadableText = true;
+    }
+  }
+
+  if (!hasReadableText && extra.pdfPath) {
+    lines.push("📝 **TXT/MD:** 尚未转换 — 使用 `zotero_ocr` 进行 OCR 转换");
   }
 
   // Notes
@@ -152,6 +195,10 @@ export function fmtComprehensiveItem(item: ZoteroItem, extra: ComprehensiveData)
     }
     if (extra.annotations.length > 15) lines.push(`- ... and ${extra.annotations.length - 15} more`);
   }
+
+  // Suggested next
+  lines.push("");
+  lines.push(suggestNext(hasReadableText ? "item" : "item_no_ocr"));
 
   return lines.join("\n");
 }

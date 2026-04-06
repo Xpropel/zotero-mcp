@@ -109,6 +109,11 @@ export function getAttachmentsForParents(parentKeys: string[]): AttachmentRow[] 
     .all(...parentKeys) as AttachmentRow[];
 }
 
+/** Shared read-only DB handle for sql-fallback (same copy rules as getLibraries). */
+export function getZoteroSqlite(): Database.Database {
+  return getDb();
+}
+
 export function getFeedItems(libraryId: number, limit = 20): FeedItem[] {
   return getDb()
     .prepare(

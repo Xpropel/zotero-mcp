@@ -1,19 +1,20 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { writeFileSync, statSync } from "node:fs";
-import { join, basename, extname, dirname } from "node:path";
+import { join, dirname, basename, extname } from "node:path";
 import * as zot from "../zotero-client.js";
-import { resolveItemFiles, resolveAttachmentPath, suggestTxtFilename } from "../utils.js";
+import { resolveItemFiles, suggestTxtFilename } from "../utils.js";
 import { ok, fail, fmtComprehensiveItem } from "../formatters.js";
-import type { ZoteroItem, ZoteroAnnotationData } from "../types.js";
+import type { ZoteroAnnotationData } from "../types.js";
 
 export function registerItemTools(server: McpServer): void {
   server.tool(
     "zotero_item",
     "Get comprehensive details for a Zotero item in ONE call: metadata, abstract, " +
-      "PDF/TXT file paths, existing notes, and annotations. " +
-      "If TXT exists, the full text is already available — read it directly instead of calling PaddleOCR. " +
-      "If only PDF exists, get the PDF path and pass it to PaddleOCR, then use zotero_save_txt to cache the result.",
+      "PDF/TXT/MD file paths, existing notes, and annotations. " +
+      "If MD exists, prefer reading it (preserves structure). " +
+      "If only TXT exists, read it directly. " +
+      "If only PDF exists, use zotero_ocr to convert, then read the result.",
     {
       item_key: z.string().describe("Zotero item key (from zotero_search results)"),
     },
@@ -22,11 +23,13 @@ export function registerItemTools(server: McpServer): void {
         const item = await zot.getItem(item_key);
         const children = await zot.getItemChildren(item_key);
 
-        // Resolve files (PDF + TXT detection)
+        // Resolve files (PDF + TXT + MD detection)
         const att = zot.findBestAttachment(children);
         let pdfPath: string | undefined;
         let txtPath: string | undefined;
         let txtSize: number | undefined;
+        let mdPath: string | undefined;
+        let mdSize: number | undefined;
         let pdfFilename: string | undefined;
 
         if (att) {
@@ -34,6 +37,8 @@ export function registerItemTools(server: McpServer): void {
           pdfPath = files.pdfPath;
           txtPath = files.txtPath;
           txtSize = files.txtSize;
+          mdPath = files.mdPath;
+          mdSize = files.mdSize;
           pdfFilename = att.filename || undefined;
         }
 
@@ -59,6 +64,8 @@ export function registerItemTools(server: McpServer): void {
           pdfPath,
           txtPath,
           txtSize,
+          mdPath,
+          mdSize,
           pdfFilename,
           notes,
           annotations: annotationData,
@@ -69,11 +76,11 @@ export function registerItemTools(server: McpServer): void {
 
   server.tool(
     "zotero_save_txt",
-    "Save PaddleOCR-converted text alongside the PDF in Zotero storage. " +
-      "Next time zotero_item is called, it will show the TXT as available — no need to re-run PaddleOCR.",
+    "Save text content alongside the PDF in Zotero storage. " +
+      "Typically used after PaddleOCR conversion. Prefer zotero_ocr which does this automatically.",
     {
       item_key: z.string().describe("Zotero item key"),
-      content: z.string().describe("Full text content from PaddleOCR"),
+      content: z.string().describe("Full text content"),
       filename: z.string().optional().describe("Custom filename (default: derived from PDF name, e.g. paper.txt)"),
     },
     async ({ item_key, content, filename }) => {

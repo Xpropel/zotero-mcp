@@ -60,7 +60,20 @@ export function findZoteroDataDir(): string {
 
   if (platform === "darwin") {
     candidates.push(join(home, "Zotero"));
-    candidates.push(join(home, "Library", "Application Support", "Zotero", "Profiles"));
+    const profilesDir = join(home, "Library", "Application Support", "Zotero", "Profiles");
+    if (existsSync(profilesDir)) {
+      try {
+        const subdirs = readdirSync(profilesDir);
+        for (const sub of subdirs) {
+          const candidate = join(profilesDir, sub);
+          if (statSync(candidate).isDirectory() && existsSync(join(candidate, "zotero.sqlite"))) {
+            candidates.push(candidate);
+            break;
+          }
+        }
+      } catch { /* ignore */ }
+    }
+    if (!candidates.some((d) => d.startsWith(profilesDir))) candidates.push(profilesDir);
   } else if (platform === "win32") {
     const appData = process.env.APPDATA || join(home, "AppData", "Roaming");
     candidates.push(join(home, "Zotero"));
@@ -123,11 +136,13 @@ export function getStorageDir(attachmentKey: string): string {
 
 export function resolveItemFiles(attachmentKey: string, storagePath?: string): ItemFiles {
   const dir = getStorageDir(attachmentKey);
-  if (!existsSync(dir)) return { hasPdf: false, hasTxt: false };
+  if (!existsSync(dir)) return { hasPdf: false, hasTxt: false, hasMd: false };
 
   let pdfPath: string | undefined;
   let txtPath: string | undefined;
   let txtSize: number | undefined;
+  let mdPath: string | undefined;
+  let mdSize: number | undefined;
 
   try {
     const files = readdirSync(dir);
@@ -146,14 +161,23 @@ export function resolveItemFiles(attachmentKey: string, storagePath?: string): I
       txtPath = join(dir, txt);
       try { txtSize = statSync(txtPath).size; } catch { /* ignore */ }
     }
+
+    const md = files.find((f) => f.toLowerCase().endsWith(".md"));
+    if (md) {
+      mdPath = join(dir, md);
+      try { mdSize = statSync(mdPath).size; } catch { /* ignore */ }
+    }
   } catch { /* dir unreadable */ }
 
   return {
     hasPdf: !!pdfPath,
     hasTxt: !!txtPath,
+    hasMd: !!mdPath,
     pdfPath,
     txtPath,
     txtSize,
+    mdPath,
+    mdSize,
   };
 }
 

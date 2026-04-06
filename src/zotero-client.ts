@@ -6,9 +6,10 @@ import type {
   ActiveLibrary,
 } from "./types.js";
 import { resolveAttachmentPath } from "./utils.js";
+import * as sql from "./sql-fallback.js";
 
 const LOCAL_PORT = 23119;
-const LOCAL = `http://localhost:${LOCAL_PORT}`;
+const LOCAL = `http://127.0.0.1:${LOCAL_PORT}`;
 const WEB = "https://api.zotero.org";
 const TIMEOUT = 15_000;
 const BBT_TIMEOUT = 5_000;
@@ -62,6 +63,17 @@ async function localGet<T>(path: string, params?: Record<string, string>): Promi
   const data = await res.json();
   if (data == null) throw new Error(`Zotero API empty response for ${path}`);
   return data as T;
+}
+
+/** When local HTTP API is down, read from zotero.sqlite (set ZOTERO_DISABLE_SQLITE_FALLBACK=1 to disable). */
+async function tryLocalOrSql<T>(apiCall: () => Promise<T>, sqlFallback: () => T): Promise<T> {
+  if (process.env.ZOTERO_FORCE_SQLITE === "1") return sqlFallback();
+  try {
+    return await apiCall();
+  } catch (e) {
+    if (process.env.ZOTERO_DISABLE_SQLITE_FALLBACK === "1") throw e;
+    return sqlFallback();
+  }
 }
 
 function webHeaders(): Record<string, string> {
@@ -125,6 +137,22 @@ function extractCreatedKey(result: unknown): string {
   return "created";
 }
 
+/** How `zotero_create_note` chooses between local Connector and Web API. */
+export type CreateNoteResult = {
+             key: string;
+             via: "connector" | "web";
+             /** Present when using Connector: Zotero ignores `parentItem` on standalone notes. */
+             connectorParentIgnored?: boolean;
+           };
+
+type NotesWriteMode = "auto" | "local" | "web";
+
+function getNotesWriteMode(): NotesWriteMode {
+  const v = (process.env.ZOTERO_NOTES_WRITE_MODE || "auto").toLowerCase();
+  if (v === "local" || v === "web" || v === "auto") return v;
+  return "auto";
+}
+
 // ── Read: items ──
 
 export async function searchItems(
@@ -138,11 +166,21 @@ export async function searchItems(
   if (opts.sort) p.sort = opts.sort;
   if (opts.direction) p.direction = opts.direction;
   if (opts.tag?.length) p.tag = opts.tag.join(" || ");
-  return localGet<ZoteroItem[]>("/items", p);
+  return tryLocalOrSql(
+    () => localGet<ZoteroItem[]>("/items", p),
+    () => sql.sqlSearchItems(query, opts)
+  );
 }
 
 export async function getItem(key: string): Promise<ZoteroItem> {
-  return localGet<ZoteroItem>(`/items/${encodeURIComponent(key)}`);
+  return tryLocalOrSql(
+    () => localGet<ZoteroItem>(`/items/${encodeURIComponent(key)}`),
+    () => {
+      const item = sql.sqlGetItemByKey(key);
+      if (!item) throw new Error(`Item not found: ${key}`);
+      return item;
+    }
+  );
 }
 
 export async function getItems(opts: {
@@ -154,11 +192,17 @@ export async function getItems(opts: {
   if (opts.sort) p.sort = opts.sort;
   if (opts.direction) p.direction = opts.direction;
   if (opts.itemType) p.itemType = opts.itemType;
-  return localGet<ZoteroItem[]>("/items", p);
+  return tryLocalOrSql(
+    () => localGet<ZoteroItem[]>("/items", p),
+    () => sql.sqlGetItems(opts)
+  );
 }
 
 export async function getItemChildren(key: string): Promise<ZoteroItem[]> {
-  return localGet<ZoteroItem[]>(`/items/${encodeURIComponent(key)}/children`);
+  return tryLocalOrSql(
+    () => localGet<ZoteroItem[]>(`/items/${encodeURIComponent(key)}/children`),
+    () => sql.sqlGetItemChildren(key)
+  );
 }
 
 export async function getItemFulltext(key: string): Promise<ZoteroFulltext | null> {
@@ -169,24 +213,45 @@ export async function getItemFulltext(key: string): Promise<ZoteroFulltext | nul
 // ── Read: collections / tags ──
 
 export async function getCollections(limit?: number): Promise<ZoteroCollection[]> {
-  return localGet<ZoteroCollection[]>("/collections", limit !== undefined ? { limit: String(limit) } : {});
+  return tryLocalOrSql(
+    () => localGet<ZoteroCollection[]>("/collections", limit !== undefined ? { limit: String(limit) } : {}),
+    () => {
+      const all = sql.sqlGetCollections();
+      return limit !== undefined ? all.slice(0, limit) : all;
+    }
+  );
 }
 
 export async function getCollection(key: string): Promise<ZoteroCollection> {
-  return localGet<ZoteroCollection>(`/collections/${encodeURIComponent(key)}`);
+  return tryLocalOrSql(
+    () => localGet<ZoteroCollection>(`/collections/${encodeURIComponent(key)}`),
+    () => {
+      const c = sql.sqlGetCollectionByKey(key);
+      if (!c) throw new Error(`Collection not found: ${key}`);
+      return c;
+    }
+  );
 }
 
 export async function getCollectionItems(key: string, limit?: number): Promise<ZoteroItem[]> {
-  return localGet<ZoteroItem[]>(
-    `/collections/${encodeURIComponent(key)}/items`,
-    limit !== undefined ? { limit: String(limit) } : {}
+  return tryLocalOrSql(
+    () =>
+      localGet<ZoteroItem[]>(
+        `/collections/${encodeURIComponent(key)}/items`,
+        limit !== undefined ? { limit: String(limit) } : {}
+      ),
+    () => sql.sqlGetCollectionItems(key, limit)
   );
 }
 
 export async function getTags(limit?: number): Promise<Array<{ tag: string; meta: { numItems: number } }>> {
-  return localGet<Array<{ tag: string; meta: { numItems: number } }>>(
-    "/tags",
-    limit !== undefined ? { limit: String(limit) } : {}
+  return tryLocalOrSql(
+    () =>
+      localGet<Array<{ tag: string; meta: { numItems: number } }>>(
+        "/tags",
+        limit !== undefined ? { limit: String(limit) } : {}
+      ),
+    () => sql.sqlGetTags(limit)
   );
 }
 
@@ -213,7 +278,11 @@ export function findBestAttachment(children: ZoteroItem[]): AttachmentInfo | nul
 
 // ── Write: notes ──
 
-export async function createItemNote(parentKey: string, noteHtml: string, tags: string[] = []): Promise<string> {
+export async function createItemNote(
+  parentKey: string,
+  noteHtml: string,
+  tags: string[] = []
+): Promise<CreateNoteResult> {
   const noteData = {
     itemType: "note",
     parentItem: parentKey,
@@ -221,18 +290,200 @@ export async function createItemNote(parentKey: string, noteHtml: string, tags: 
     tags: tags.map((t) => ({ tag: t })),
   };
 
-  if (hasWebApi()) return extractCreatedKey(await webPost("/items", [noteData]));
-
-  const res = await fetchT(`${LOCAL}/connector/saveItems`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ items: [{ ...noteData, tags }], uri: "about:blank" }),
-  });
-  if (!res.ok) {
-    const t = await res.text().catch(() => "");
-    throw new Error(`Connector saveItems ${res.status}: ${t || res.statusText}`);
+  async function postConnector(): Promise<Response> {
+    return fetchT(`${LOCAL}/connector/saveItems`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items: [{ ...noteData, tags }], uri: "about:blank" }),
+    });
   }
-  return "created-via-connector";
+
+  const mode = getNotesWriteMode();
+
+  if (mode === "web") {
+    if (!hasWebApi()) {
+      throw new Error(
+        "ZOTERO_NOTES_WRITE_MODE=web requires ZOTERO_API_KEY and ZOTERO_LIBRARY_ID"
+      );
+    }
+    const key = extractCreatedKey(await webPost("/items", [noteData]));
+    return { key, via: "web" };
+  }
+
+  if (mode === "local") {
+    const res = await postConnector();
+    if (!res.ok) {
+      const t = await res.text().catch(() => "");
+      throw new Error(
+        `ZOTERO_NOTES_WRITE_MODE=local: connector failed (HTTP ${res.status}). Is Zotero running with connector enabled? ${t || res.statusText}`
+      );
+    }
+    // Zotero.Translate.ItemSaver._saveNote() does not read `parentItem` from JSON for a standalone
+    // note; only an explicit parentItemID (child notes array) works. Connector saveItems uses that path.
+    return {
+      key: "created-via-connector",
+      via: "connector",
+      connectorParentIgnored: true,
+    };
+  }
+
+  // auto: use Web API when available so `parentItem` is honored (child note under the entry).
+  // Connector cannot attach standalone notes to a parent — they land in the save-target collection.
+  if (hasWebApi()) {
+    const key = extractCreatedKey(await webPost("/items", [noteData]));
+    return { key, via: "web" };
+  }
+
+  const res = await postConnector();
+  if (res.ok) {
+    return {
+      key: "created-via-connector",
+      via: "connector",
+      connectorParentIgnored: true,
+    };
+  }
+
+  const t = await res.text().catch(() => "");
+  throw new Error(
+    `Connector saveItems ${res.status}: ${t || res.statusText}. Start Zotero, or set ZOTERO_API_KEY + ZOTERO_LIBRARY_ID (or ZOTERO_NOTES_WRITE_MODE=web).`
+  );
+}
+
+// ── Write: create item ──
+
+export async function createItem(payload: Record<string, unknown>): Promise<string> {
+  if (!hasWebApi()) {
+    throw new Error("Creating items requires the Zotero Web API.\nSet ZOTERO_API_KEY and ZOTERO_LIBRARY_ID.");
+  }
+  return extractCreatedKey(await webPost("/items", [payload]));
+}
+
+// ── Write: attachments ──
+
+export async function uploadAttachment(
+  parentKey: string,
+  filePath: string,
+  contentType: string,
+  filename: string
+): Promise<string> {
+  if (!hasWebApi()) throw new Error("Uploading attachments requires Zotero Web API.");
+
+  // Step 1: Create attachment item
+  const attPayload = {
+    itemType: "attachment",
+    parentItem: parentKey,
+    linkMode: "imported_file",
+    title: filename,
+    contentType,
+    filename,
+  };
+  const attKey = extractCreatedKey(await webPost("/items", [attPayload]));
+
+  // Step 2: Upload file content
+  const { readFileSync, statSync } = await import("node:fs");
+  const fileContent = readFileSync(filePath);
+  const md5 = await computeMd5(fileContent);
+  const size = statSync(filePath).size;
+
+  // Get upload authorization
+  const authRes = await fetchT(`${webBase()}/items/${attKey}/file`, {
+    method: "POST",
+    headers: {
+      ...webHeaders(),
+      "Content-Type": "application/x-www-form-urlencoded",
+      "If-None-Match": "*",
+    },
+    body: `md5=${md5}&filename=${encodeURIComponent(filename)}&filesize=${size}&mtime=${Date.now()}`,
+  });
+
+  if (!authRes.ok) {
+    const t = await authRes.text().catch(() => "");
+    throw new Error(`Upload auth failed ${authRes.status}: ${t}`);
+  }
+
+  const auth = (await authRes.json()) as { exists?: boolean; url?: string; contentType?: string; prefix?: string; suffix?: string; uploadKey?: string };
+  if (auth.exists) return attKey; // File already exists
+
+  if (auth.url) {
+    // Upload file
+    const body = Buffer.concat([
+      Buffer.from(auth.prefix || "", "utf-8"),
+      fileContent,
+      Buffer.from(auth.suffix || "", "utf-8"),
+    ]);
+    const upRes = await fetchT(auth.url, {
+      method: "POST",
+      headers: { "Content-Type": auth.contentType || "application/octet-stream" },
+      body,
+    }, 60_000);
+
+    if (!upRes.ok) throw new Error(`File upload failed: ${upRes.status}`);
+
+    // Register upload
+    await fetchT(`${webBase()}/items/${attKey}/file`, {
+      method: "POST",
+      headers: {
+        ...webHeaders(),
+        "Content-Type": "application/x-www-form-urlencoded",
+        "If-None-Match": "*",
+      },
+      body: `upload=${auth.uploadKey}`,
+    });
+  }
+
+  return attKey;
+}
+
+async function computeMd5(data: Buffer): Promise<string> {
+  const { createHash } = await import("node:crypto");
+  return createHash("md5").update(data).digest("hex");
+}
+
+export async function createLinkedUrlAttachment(
+  parentKey: string,
+  url: string,
+  title: string
+): Promise<string> {
+  if (!hasWebApi()) throw new Error("Creating attachments requires Zotero Web API.");
+  return extractCreatedKey(
+    await webPost("/items", [{
+      itemType: "attachment",
+      parentItem: parentKey,
+      linkMode: "linked_url",
+      title,
+      url,
+      contentType: "application/pdf",
+    }])
+  );
+}
+
+// ── Write: collections ──
+
+export async function createCollection(name: string, parentKey?: string): Promise<string> {
+  if (!hasWebApi()) throw new Error("Creating collections requires Zotero Web API.");
+  const payload: Record<string, unknown> = { name };
+  if (parentKey) payload.parentCollection = parentKey;
+  const result = await webPost("/collections", [payload]);
+  return extractCreatedKey(result);
+}
+
+export async function addToCollection(collectionKey: string, itemKeys: string[]): Promise<void> {
+  // Read each item, add collection, patch
+  for (const key of itemKeys) {
+    const item = await webGet<ZoteroItem>(`/items/${encodeURIComponent(key)}`);
+    const collections = new Set<string>(item.data.collections || []);
+    if (collections.has(collectionKey)) continue;
+    collections.add(collectionKey);
+    await webPatch(`/items/${encodeURIComponent(key)}`, { collections: [...collections] }, item.version);
+  }
+}
+
+export async function removeFromCollection(collectionKey: string, itemKeys: string[]): Promise<void> {
+  for (const key of itemKeys) {
+    const item = await webGet<ZoteroItem>(`/items/${encodeURIComponent(key)}`);
+    const collections = (item.data.collections || []).filter((c: string) => c !== collectionKey);
+    await webPatch(`/items/${encodeURIComponent(key)}`, { collections }, item.version);
+  }
 }
 
 // ── Write: annotations ──
@@ -253,6 +504,16 @@ export async function updateItem(item: ZoteroItem): Promise<void> {
   const current = await webGet<ZoteroItem>(path);
   const { version: _v, ...dataWithoutVersion } = item.data;
   await webPatch(path, dataWithoutVersion, current.version);
+}
+
+export async function updateItemFields(
+  key: string,
+  fields: Record<string, unknown>
+): Promise<void> {
+  if (!hasWebApi()) throw new Error("Updating items requires Zotero Web API.");
+  const path = `/items/${encodeURIComponent(key)}`;
+  const current = await webGet<ZoteroItem>(path);
+  await webPatch(path, fields, current.version);
 }
 
 // ── Better BibTeX ──

@@ -1,5 +1,5 @@
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { server } from "./server.js";
+import { server, VERSION } from "./server.js";
 import { closeDb } from "./local-db.js";
 
 function cleanup() {
@@ -13,7 +13,7 @@ async function main() {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  process.stderr.write("Zotero MCP server started (stdio)\n");
+  process.stderr.write(`Zotero MCP v${VERSION} started (18 tools, stdio)\n`);
 }
 
 main().catch((err) => {

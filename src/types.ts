@@ -147,7 +147,10 @@ export interface AttachmentRow {
 export interface ItemFiles {
   hasPdf: boolean;
   hasTxt: boolean;
+  hasMd: boolean;
   pdfPath?: string;
   txtPath?: string;
   txtSize?: number;
+  mdPath?: string;
+  mdSize?: number;
 }

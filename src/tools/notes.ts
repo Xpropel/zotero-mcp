@@ -36,13 +36,21 @@ export function registerNoteTools(server: McpServer): void {
           ? content
           : content.split("\n\n").map((p) => `<p>${escapeHtml(p).replace(/\n/g, "<br/>")}</p>`).join("");
 
-        const result = await zot.createItemNote(item_key, html, tags ?? []);
-        const via = zot.hasWebApi() ? "Web API" : "Connector";
-        return ok(
+        const { key, via, connectorParentIgnored } = await zot.createItemNote(item_key, html, tags ?? []);
+        const methodLabel = via === "connector" ? "Local (Zotero connector)" : "Web API";
+        let text =
           `Note created for "${parent.data.title || item_key}"\n` +
-          `**Method:** ${via}` +
-          (result !== "created-via-connector" ? `\n**Note key:** ${result}` : "")
-        );
+          `**Method:** ${methodLabel}` +
+          (key !== "created-via-connector" ? `\n**Note key:** ${key}` : "");
+        if (connectorParentIgnored) {
+          text +=
+            "\n\n**Note:** Connector 写入时，Zotero 客户端会忽略独立笔记 JSON 里的 `parentItem`，笔记会进当前「保存到」的集合而不是该条目下方。" +
+            "要挂在文献下（与 PDF 同级），请配置 `ZOTERO_API_KEY` + `ZOTERO_LIBRARY_ID` 并使用默认 `auto` 或 `web`（走 Web API，同步后本地库一致）。";
+        } else if (via === "web") {
+          text +=
+            "\n\n**Note:** 笔记已写入线上库并带 `parentItem`；若本机暂未显示，请在 Zotero 中执行一次同步。";
+        }
+        return ok(text);
       } catch (e) { return fail(e); }
     }
   );
