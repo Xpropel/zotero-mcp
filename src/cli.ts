@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Zotero CLI v3.3 — 命令行工具，直接操作本地 Zotero 文献库
+ * Zotero CLI v3.4 — 命令行工具，直接操作本地 Zotero 文献库
  *
  * 命令：
  *   search      搜索文献
@@ -61,8 +61,8 @@ function shortAuthors(creators?: Array<{ firstName?: string; lastName?: string; 
 const program = new Command();
 program
   .name("zotero_manager")
-  .description("Zotero 文献库命令行工具 v3.3")
-  .version("3.3.0");
+  .description("Zotero 文献库命令行工具 v3.4")
+  .version("3.4.0");
 
 // ── search ──
 program
@@ -596,7 +596,7 @@ program
 
       if (!text) {
         console.log(`${c.yellow}⚠ 无可读全文${c.reset}`);
-        if (files.pdfPath) console.log(`PDF: ${files.pdfPath}\n运行: zotero ocr ${key} 或使用 zotero_manage_files 保存 MD/TXT`);
+        if (files.pdfPath) console.log(`PDF: ${files.pdfPath}\n运行: zotero ocr ${key} 或使用 MCP zotero_files 保存 MD/TXT`);
         return;
       }
 

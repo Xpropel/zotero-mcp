@@ -1,18 +1,18 @@
-# Zotero MCP Server v3.3
+# Zotero MCP Server v3.4
 
 Local-first Zotero MCP server and CLI for managing a real Zotero Desktop
-library. The project now favors a smaller set of high-value tools over broad
-shortcuts.
+library. v3.4 compresses the MCP surface to 9 strong tools and moves related
+operations behind explicit `action` parameters.
 
 ## What This Tool Is For
 
 | Goal | Current support |
 |---|---|
 | Inspect one Zotero item | Metadata, attachments, PDF/MD/TXT inventory, notes, annotations |
-| Manage item files | Import/link PDF or other attachments; save or import MD/TXT sidecar files |
-| Read LLM-ready text | Read saved MD/TXT sidecars or Zotero's text index, not raw PDF bytes |
-| Write locally | Create/update/delete items, notes, attachments, collections, tags through a Zotero plugin |
+| Manage item files | Import/link attachments; save/import/read MD/TXT sidecars; OCR PDFs |
+| Write locally | Create/update/delete items, notes, attachments, collections, and tags through a Zotero plugin |
 | Organize a library | Collections, item moves, tag rename/merge/delete, duplicate checks |
+| Diagnose runtime | Local API, SQLite fallback, Local Bridge plugin, library switching |
 
 ## Architecture
 
@@ -33,25 +33,8 @@ read-only local data            local CRUD via Zotero internal APIs
 
 Zotero's built-in local API is reliable for reads but does not implement item
 CRUD writes. This project ships `zotero-local-bridge`, a Zotero Desktop plugin
-that exposes a narrow local endpoint set:
-
-```
-/mcp-bridge/ping
-/mcp-bridge/items/create
-/mcp-bridge/items/update
-/mcp-bridge/items/delete
-/mcp-bridge/collections/create
-/mcp-bridge/collections/update
-/mcp-bridge/collections/delete
-/mcp-bridge/collections/add-items
-/mcp-bridge/collections/remove-items
-/mcp-bridge/attachments/import-file
-/mcp-bridge/attachments/link-file
-/mcp-bridge/attachments/link-url
-```
-
-No Zotero cloud API key is required for local CRUD. Direct SQLite writes are not
-used.
+that exposes narrow local write endpoints. No Zotero cloud API key is required,
+and direct SQLite writes are not used.
 
 ## Install
 
@@ -73,31 +56,29 @@ curl -sS -H 'Zotero-Allowed-Request: 1' \
 npm run dev:cli -- status
 ```
 
-Expected bridge response:
-
-```json
-{"ok":true,"result":{"version":"0.2.0","zoteroVersion":"9.0.3","userLibraryID":1}}
-```
-
 ## MCP Tools
 
-The v3.3 interface has 23 focused tools.
+The v3.4 interface exposes 9 consolidated tools.
 
-| Area | Tools | Purpose |
+| Tool | Main actions | Purpose |
 |---|---|---|
-| Search | `zotero_search` | Find candidate items with file availability indicators |
-| Item inventory | `zotero_item` | Inspect one item: metadata, attachment keys, PDF/MD/TXT state, notes, annotations |
-| File text | `zotero_read_file`, `zotero_manage_files`, `zotero_ocr` | Read or create MD/TXT sidecars for an item's attachment |
-| Item CRUD | `zotero_create_item`, `zotero_update`, `zotero_delete_items`, `zotero_add` | Create, import, edit, delete Zotero items |
-| Notes | `zotero_create_note`, `zotero_search_notes`, `zotero_manage_notes` | Create, find, update, append, delete notes |
-| Attachments | `zotero_manage_attachments` | List/import/link/update/delete Zotero attachments |
-| Organization | `zotero_collections`, `zotero_manage_collections`, `zotero_move_items` | Browse and manage collections |
-| Tags | `zotero_tags`, `zotero_batch_tags`, `zotero_manage_tags` | Batch tag edits plus rename/merge/delete |
-| Quality/export | `zotero_duplicates`, `zotero_export` | Duplicate checks and BibTeX export |
-| Runtime | `zotero_capabilities`, `zotero_libraries` | Diagnose local bridge/API state and switch library |
+| `zotero_status` | `check`, `libraries`, `switch_library` | Diagnose local runtime and select a Zotero library |
+| `zotero_search` | filtered search | Find candidate items with PDF/MD/TXT indicators |
+| `zotero_item` | single item read | Inspect metadata, file inventory, notes, and annotations |
+| `zotero_items` | `create`, `update`, `delete`, `import_doi`, `duplicates` | Manage item records |
+| `zotero_files` | `list`, `read`, `write_text`, `import_sidecar`, `import_attachment`, `link_attachment`, `link_url`, `update_attachment`, `delete_attachment`, `ocr` | Manage attachments and readable sidecar files |
+| `zotero_notes` | `list`, `search`, `create`, `update`, `append`, `delete` | Manage Zotero child notes |
+| `zotero_collections` | `list`, `items`, `create`, `rename`, `move`, `delete`, `add_items`, `remove_items`, `move_items` | Browse and manage collections |
+| `zotero_tags` | `list`, `batch`, `rename`, `merge`, `delete` | Manage tags across items |
+| `zotero_export` | BibTeX export | Export references |
 
-Removed weak shortcuts: `zotero_recent`, `zotero_feeds`, `zotero_fulltext`,
-and `zotero_save_txt`.
+Removed weak or fragmented public tools include `zotero_recent`,
+`zotero_feeds`, `zotero_fulltext`, `zotero_save_txt`, `zotero_read_file`,
+`zotero_manage_files`, `zotero_ocr`, `zotero_create_item`, `zotero_update`,
+`zotero_delete_items`, `zotero_add`, `zotero_create_note`,
+`zotero_manage_notes`, `zotero_search_notes`, `zotero_manage_attachments`,
+`zotero_manage_collections`, `zotero_move_items`, `zotero_batch_tags`,
+`zotero_manage_tags`, `zotero_capabilities`, and `zotero_libraries`.
 
 ## File Model
 
@@ -107,25 +88,26 @@ gain readable sidecar files in the same Zotero storage directory:
 | File type | Meaning |
 |---|---|
 | PDF | Original attachment file |
-| MD | Markdown text extracted or written for LLM reading |
-| TXT | Plain-text extraction or notes cache |
+| MD | Markdown extraction or LLM-ready reading file |
+| TXT | Plain-text extraction or readable fallback |
 | Note | Zotero child note item, managed separately from files |
 
-Use `zotero_item` first. It returns the attachment key and whether PDF, MD, and
-TXT files exist. Then use:
+Use `zotero_item` first. It returns attachment keys and whether PDF, MD, and TXT
+files exist. Then use `zotero_files`:
 
-| Tool | Use |
+| Action | Use |
 |---|---|
-| `zotero_manage_files` with `action=list` | Inspect PDF/MD/TXT paths for an item attachment |
-| `zotero_manage_files` with `action=write_text` | Save supplied MD/TXT content next to the attachment |
-| `zotero_manage_files` with `action=import_file` | Copy an existing local `.md` or `.txt` into Zotero storage |
-| `zotero_read_file` | Read existing MD/TXT text for LLM analysis |
-| `zotero_ocr` | Generate text from PDF when no readable MD/TXT exists |
-
-`zotero_read_file` replaces the old `zotero_fulltext` name. It reads text
-representations; it does not parse PDF bytes directly.
+| `list` | Inspect PDF/MD/TXT paths for item attachments |
+| `read` | Read existing MD/TXT text or Zotero's text index |
+| `write_text` | Save supplied MD/TXT content next to an attachment |
+| `import_sidecar` | Copy an existing local `.md` or `.txt` into Zotero storage |
+| `ocr` | Generate MD/TXT/JSON text from a PDF attachment |
+| `import_attachment`, `link_attachment`, `link_url` | Add attachment records |
+| `update_attachment`, `delete_attachment` | Edit or remove attachment records |
 
 ## CLI Commands
+
+The CLI remains available for local terminal workflows:
 
 ```
 search [query]         Search with filters
@@ -162,17 +144,17 @@ npm run smoke:local-crud
 ```
 
 The smoke test runs through MCP stdio against a real Zotero Desktop instance. It
-creates temporary collections, an item, a note, imported and linked attachments,
-a saved MD sidecar file, tag edits, and a collection move. It verifies the
-results through Zotero's local API and permanently deletes only the temporary
-test data.
+verifies the 9-tool interface, creates temporary collections, an item, a note,
+imported and linked attachments, a saved MD sidecar file, tag edits, and a
+collection move. It verifies the results through Zotero's local API and
+permanently deletes only the temporary test data.
 
 ## Source Layout
 
 ```
 src/
 ├── index.ts            MCP stdio entry point
-├── server.ts           focused tool registration
+├── server.ts           consolidated tool registration
 ├── cli.ts              CLI entry point
 ├── zotero-client.ts    Local API + bridge facade
 ├── local-bridge.ts     HTTP client for /mcp-bridge endpoints

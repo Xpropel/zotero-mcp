@@ -12,62 +12,44 @@ function toNoteHtml(content: string): string {
 
 export function registerNoteTools(server: McpServer): void {
   server.tool(
-    "zotero_search_notes",
-    "Search through note contents across the library. Useful to check if a paper has already been summarized.",
+    "zotero_notes",
+    "List, search, create, update, append to, or delete Zotero notes.",
     {
-      query: z.string().describe("Search query"),
-      limit: z.number().default(20).describe("Max results"),
-    },
-    async ({ query, limit }) => {
-      try {
-        const items = await zot.searchItems(query, { qmode: "everything", itemType: "note", limit });
-        return ok(fmtNotes(items, `Note Search: "${query}"`, limit));
-      } catch (e) { return fail(e); }
-    }
-  );
-
-  server.tool(
-    "zotero_create_note",
-    "Create a note for a Zotero item. Use this after reading a paper (via PaddleOCR) to save your summary back to Zotero.",
-    {
-      item_key: z.string().describe("Parent item key"),
-      content: z.string().describe("Note content (plain text or HTML)"),
-      tags: z.array(z.string()).optional().describe("Tags for the note"),
-    },
-    async ({ item_key, content, tags }) => {
-      try {
-        const parent = await zot.getItem(item_key);
-
-        const html = toNoteHtml(content);
-        const { key } = await zot.createItemNote(item_key, html, tags ?? []);
-        let text =
-          `Note created for "${parent.data.title || item_key}"\n` +
-          `**Method:** Local bridge\n` +
-          `**Note key:** [${key}]`;
-        return ok(text);
-      } catch (e) { return fail(e); }
-    }
-  );
-
-  server.tool(
-    "zotero_manage_notes",
-    "List, update, append to, or delete Zotero notes. Create new notes with zotero_create_note.",
-    {
-      action: z.enum(["list", "update", "append", "delete"]).describe("Action to perform"),
-      item_key: z.string().optional().describe("Parent item key for list action"),
+      action: z.enum(["list", "search", "create", "update", "append", "delete"]).describe("Action to perform"),
+      query: z.string().optional().describe("Search query for search action"),
+      item_key: z.string().optional().describe("Parent item key for list/create"),
       note_key: z.string().optional().describe("Note item key for update/append/delete"),
-      content: z.string().optional().describe("Plain text or HTML note content for update/append"),
-      tags: z.array(z.string()).optional().describe("Replace note tags on update"),
+      content: z.string().optional().describe("Plain text or HTML note content"),
+      tags: z.array(z.string()).optional().describe("Tags for create/update; update replaces note tags"),
+      limit: z.number().default(20).describe("Max notes for search/list output"),
       confirm: z.boolean().default(false).describe("Required true for delete action"),
       permanent: z.boolean().default(false).describe("When true, permanently erase instead of moving to Zotero trash"),
     },
-    async ({ action, item_key, note_key, content, tags, confirm, permanent }) => {
+    async ({ action, query, item_key, note_key, content, tags, limit, confirm, permanent }) => {
       try {
+        if (action === "search") {
+          if (!query) return fail(new Error("query is required for search action"));
+          const items = await zot.searchItems(query, { qmode: "everything", itemType: "note", limit });
+          return ok(fmtNotes(items, `Note Search: "${query}"`, limit));
+        }
+
         if (action === "list") {
           if (!item_key) return fail(new Error("item_key is required for list action"));
           const children = await zot.getItemChildren(item_key);
           const notes = children.filter((child) => child.data.itemType === "note");
-          return ok(fmtNotes(notes, `Notes for [${item_key}]`, notes.length || 20));
+          return ok(fmtNotes(notes, `Notes for [${item_key}]`, limit));
+        }
+
+        if (action === "create") {
+          if (!item_key) return fail(new Error("item_key is required for create action"));
+          if (!content) return fail(new Error("content is required for create action"));
+          const parent = await zot.getItem(item_key);
+          const { key } = await zot.createItemNote(item_key, toNoteHtml(content), tags ?? []);
+          return ok(
+            `Note created for "${parent.data.title || item_key}"\n` +
+              "**Method:** Local bridge\n" +
+              `**Note key:** [${key}]`
+          );
         }
 
         if (action === "update") {
@@ -91,22 +73,20 @@ export function registerNoteTools(server: McpServer): void {
           return ok(`Appended content to note [${note_key}]`);
         }
 
-        if (action === "delete") {
-          if (!note_key) return fail(new Error("note_key is required for delete action"));
-          const note = await zot.getItem(note_key);
-          if (note.data.itemType !== "note") return fail(new Error(`Item is not a note: ${note_key}`));
-          if (!confirm) {
-            return ok(
-              `Delete preview: note [${note_key}] under [${note.data.parentItem || "unknown parent"}].\n` +
-                "Run again with confirm=true to delete it."
-            );
-          }
-          await zot.deleteItem(note_key, permanent);
-          return ok(`Deleted note [${note_key}]`);
+        if (!note_key) return fail(new Error("note_key is required for delete action"));
+        const note = await zot.getItem(note_key);
+        if (note.data.itemType !== "note") return fail(new Error(`Item is not a note: ${note_key}`));
+        if (!confirm) {
+          return ok(
+            `Delete preview: note [${note_key}] under [${note.data.parentItem || "unknown parent"}].\n` +
+              "Run again with confirm=true to delete it."
+          );
         }
-
-        return fail(new Error(`Unknown action: ${action}`));
-      } catch (e) { return fail(e); }
+        await zot.deleteItem(note_key, permanent);
+        return ok(`Deleted note [${note_key}]`);
+      } catch (e) {
+        return fail(e);
+      }
     }
   );
 }

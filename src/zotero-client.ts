@@ -68,7 +68,7 @@ async function tryLocalOrSql<T>(apiCall: () => Promise<T>, sqlFallback: () => T)
   }
 }
 
-/** How `zotero_create_note` reports local bridge writes. */
+/** How local bridge note creation reports writes. */
 export type CreateNoteResult = {
   key: string;
   via: "bridge";

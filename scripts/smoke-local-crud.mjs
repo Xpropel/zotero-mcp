@@ -48,7 +48,7 @@ async function cleanup() {
   const itemKeys = [...created.items].reverse();
   if (itemKeys.length) {
     try {
-      await call("zotero_delete_items", { item_keys: itemKeys, confirm: true, permanent: true });
+      await call("zotero_items", { action: "delete", item_keys: itemKeys, confirm: true, permanent: true });
       console.log(`cleanup items: ${itemKeys.length}`);
     } catch (e) {
       console.error(`cleanup items failed: ${e.message}`);
@@ -56,7 +56,7 @@ async function cleanup() {
   }
   for (const key of [...created.collections].reverse()) {
     try {
-      await call("zotero_manage_collections", { action: "delete", collection_key: key, confirm: true });
+      await call("zotero_collections", { action: "delete", collection_key: key, confirm: true });
       console.log(`cleanup collection: ${key}`);
     } catch (e) {
       console.error(`cleanup collection ${key} failed: ${e.message}`);
@@ -69,24 +69,25 @@ try {
   await client.connect(transport);
   const tools = await client.listTools();
   console.log(`tools: ${tools.tools.length}`);
-  if (tools.tools.length !== 23) throw new Error(`Expected 23 focused tools, got ${tools.tools.length}`);
+  if (tools.tools.length !== 9) throw new Error(`Expected 9 consolidated tools, got ${tools.tools.length}`);
 
-  const caps = await call("zotero_capabilities", {});
+  const caps = await call("zotero_status", { action: "check" });
   if (!caps.includes("Local bridge plugin | yes")) throw new Error("Local bridge is not loaded");
   console.log("capabilities: local bridge yes");
 
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
-  const sourceText = await call("zotero_manage_collections", { action: "create", name: `mcp-smoke-source-${stamp}` });
+  const sourceText = await call("zotero_collections", { action: "create", name: `mcp-smoke-source-${stamp}` });
   const sourceKey = parseKey(sourceText);
   created.collections.push(sourceKey);
   console.log(`source collection: ${sourceKey}`);
 
-  const targetText = await call("zotero_manage_collections", { action: "create", name: `mcp-smoke-target-${stamp}` });
+  const targetText = await call("zotero_collections", { action: "create", name: `mcp-smoke-target-${stamp}` });
   const targetKey = parseKey(targetText);
   created.collections.push(targetKey);
   console.log(`target collection: ${targetKey}`);
 
-  const itemText = await call("zotero_create_item", {
+  const itemText = await call("zotero_items", {
+    action: "create",
     item_type: "journalArticle",
     title: `MCP Mature Local Smoke ${stamp}`,
     creators: [{ creatorType: "author", firstName: "Local", lastName: "Mature" }],
@@ -98,7 +99,7 @@ try {
   created.items.push(itemKey);
   console.log(`item: ${itemKey}`);
 
-  await call("zotero_manage_tags", {
+  await call("zotero_tags", {
     action: "rename",
     old_tag: "mcp-smoke-old-tag",
     new_tag: "mcp-smoke-new-tag",
@@ -108,7 +109,8 @@ try {
   if (!tagged.some((item) => item.key === itemKey)) throw new Error("Renamed tag not found on smoke item");
   console.log("tag rename: ok");
 
-  const noteText = await call("zotero_create_note", {
+  const noteText = await call("zotero_notes", {
+    action: "create",
     item_key: itemKey,
     content: "Initial local note",
     tags: ["mcp-smoke-note"],
@@ -117,26 +119,26 @@ try {
   created.items.push(noteKey);
   console.log(`note: ${noteKey}`);
 
-  await call("zotero_manage_notes", {
+  await call("zotero_notes", {
     action: "update",
     note_key: noteKey,
     content: "Updated local note",
     tags: ["mcp-smoke-note-updated"],
   });
-  await call("zotero_manage_notes", {
+  await call("zotero_notes", {
     action: "append",
     note_key: noteKey,
     content: "Appended local note",
   });
-  const notes = await call("zotero_manage_notes", { action: "list", item_key: itemKey });
+  const notes = await call("zotero_notes", { action: "list", item_key: itemKey });
   if (!notes.includes("Updated local note") || !notes.includes("Appended local note")) {
     throw new Error("Updated/appended note content was not listed");
   }
   console.log("note update/append/list: ok");
 
-  const importedText = await call("zotero_manage_attachments", {
-    action: "import_file",
-    parent_item_key: itemKey,
+  const importedText = await call("zotero_files", {
+    action: "import_attachment",
+    item_key: itemKey,
     file_path: importFile,
     title: "imported attachment smoke",
     content_type: "text/plain",
@@ -145,9 +147,9 @@ try {
   created.items.push(importedKey);
   console.log(`imported attachment: ${importedKey}`);
 
-  const linkedText = await call("zotero_manage_attachments", {
-    action: "link_file",
-    parent_item_key: itemKey,
+  const linkedText = await call("zotero_files", {
+    action: "link_attachment",
+    item_key: itemKey,
     file_path: linkedFile,
     title: "linked attachment smoke",
     content_type: "text/plain",
@@ -156,13 +158,13 @@ try {
   created.items.push(linkedKey);
   console.log(`linked attachment: ${linkedKey}`);
 
-  await call("zotero_manage_attachments", {
-    action: "update",
+  await call("zotero_files", {
+    action: "update_attachment",
     attachment_key: importedKey,
     title: "updated imported attachment smoke",
     tags: ["mcp-smoke-attachment"],
   });
-  await call("zotero_manage_files", {
+  await call("zotero_files", {
     action: "write_text",
     item_key: itemKey,
     attachment_key: importedKey,
@@ -173,16 +175,17 @@ try {
   if (!inventory.includes(importedKey) || !inventory.includes("| MD |")) {
     throw new Error("Item inventory did not report the imported attachment and MD file");
   }
-  const mdText = await call("zotero_read_file", {
+  const mdText = await call("zotero_files", {
+    action: "read",
     item_key: itemKey,
     attachment_key: importedKey,
     source: "md",
   });
   if (!mdText.includes("Readable markdown sidecar")) {
-    throw new Error("zotero_read_file did not return the saved MD sidecar");
+    throw new Error("zotero_files action=read did not return the saved MD sidecar");
   }
   console.log("file inventory/write/read: ok");
-  const attachments = await call("zotero_manage_attachments", { action: "list", parent_item_key: itemKey });
+  const attachments = await call("zotero_files", { action: "list", item_key: itemKey });
   if (!attachments.includes(importedKey) || !attachments.includes(linkedKey)) {
     throw new Error("Attachment list did not include both smoke attachments");
   }
@@ -191,7 +194,8 @@ try {
   }
   console.log("attachment import/link/update/list: ok");
 
-  await call("zotero_move_items", {
+  await call("zotero_collections", {
+    action: "move_items",
     item_keys: [itemKey],
     source_collection_key: sourceKey,
     target_collection_key: targetKey,

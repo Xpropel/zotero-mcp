@@ -1,6 +1,6 @@
 {
   "name": "zotero-mcp",
-  "version": "3.3.0",
+  "version": "3.4.0",
   "description": "MCP server + CLI for Zotero local library with PaddleOCR integration",
   "type": "module",
   "main": "dist/index.js",
