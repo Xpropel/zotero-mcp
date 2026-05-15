@@ -7,6 +7,48 @@ import { ok, fail } from "../formatters.js";
 
 export function registerLibraryTools(server: McpServer): void {
   server.tool(
+    "zotero_capabilities",
+    "Check the active Zotero runtime capabilities: local read, local connector, Zotero MCP Local Bridge write support, and SQLite fallback.",
+    {},
+    async () => {
+      try {
+        const caps = await zot.getRuntimeCapabilities();
+        const lines = [
+          "# Zotero MCP Capabilities",
+          "",
+          "| Capability | Status | Meaning |",
+          "|---|---:|---|",
+          `| Local API read | ${caps.localApiRead ? "yes" : "no"} | Read items through Zotero on 127.0.0.1:23119 |`,
+          `| SQLite fallback | ${caps.sqliteFallback ? "yes" : "no"} | Read-only fallback from zotero.sqlite when local API is down |`,
+          `| Local connector | ${caps.localConnector ? "yes" : "no"} | Zotero Connector endpoints are reachable |`,
+          `| Local bridge plugin | ${caps.localBridge ? "yes" : "no"} | Local CRUD writes through the zotero-local-bridge plugin |`,
+          `| Local REST write | ${caps.localApiWrite ? "yes" : "no"} | Direct POST/PATCH/DELETE on local /api endpoints |`,
+        ];
+
+        if (!caps.localApiWrite && caps.localApiWriteStatus) {
+          lines.push(
+            "",
+            `Local REST write probe returned HTTP ${caps.localApiWriteStatus}: ${caps.localApiWriteMessage || "not supported"}`
+          );
+        }
+        if (caps.localBridge) {
+          lines.push(
+            "",
+            `Local bridge version: ${caps.localBridgeVersion || "unknown"}; Zotero version: ${caps.zoteroVersion || "unknown"}`
+          );
+        } else {
+          lines.push(
+            "",
+            "CRUD writes require installing and loading `zotero-local-bridge`. Zotero's built-in local REST API is read-only for item CRUD."
+          );
+        }
+
+        return ok(lines.join("\n"));
+      } catch (e) { return fail(e); }
+    }
+  );
+
+  server.tool(
     "zotero_libraries",
     "List all accessible libraries and RSS feeds, or switch the active library.",
     {

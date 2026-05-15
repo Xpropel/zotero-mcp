@@ -1,0 +1,16 @@
+{
+  "manifest_version": 2,
+  "name": "Zotero MCP Local Bridge",
+  "version": "0.2.0",
+  "description": "Local-only CRUD bridge for zotero-mcp.",
+  "author": "Codex",
+  "homepage_url": "https://www.zotero.org/support/dev/client_coding/plugin_development",
+  "applications": {
+    "zotero": {
+      "id": "zotero-mcp-local-bridge@codex.local",
+      "update_url": "https://example.invalid/zotero-mcp-local-bridge/update.json",
+      "strict_min_version": "6.999",
+      "strict_max_version": "10.9.9"
+    }
+  }
+}

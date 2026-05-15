@@ -5,6 +5,55 @@ import { errorMessage } from "../utils.js";
 import { ok, fail } from "../formatters.js";
 
 export function registerManageTools(server: McpServer): void {
+  // ── Generic item create ──
+  server.tool(
+    "zotero_create_item",
+    "Create a Zotero item from explicit metadata. Requires the Zotero MCP Local Bridge plugin. " +
+      "Use zotero_add for DOI-based import; use this for manual CRUD-style item creation.",
+    {
+      item_type: z
+        .string()
+        .default("journalArticle")
+        .describe("Zotero item type, e.g. journalArticle, book, conferencePaper, thesis, report"),
+      title: z.string().describe("Item title"),
+      creators: z
+        .array(z.object({
+          creatorType: z.string().default("author"),
+          firstName: z.string().optional(),
+          lastName: z.string().optional(),
+          name: z.string().optional(),
+        }))
+        .optional()
+        .describe("Creators/authors/editors"),
+      fields: z
+        .record(z.any())
+        .optional()
+        .describe("Additional Zotero data fields, e.g. DOI, url, publicationTitle, date, abstractNote"),
+      collection_keys: z.array(z.string()).optional().describe("Collection keys to add the item to"),
+      tags: z.array(z.string()).optional().describe("Tags to set on the item"),
+    },
+    async ({ item_type, title, creators, fields, collection_keys, tags }) => {
+      try {
+        const payload: Record<string, unknown> = {
+          ...(fields ?? {}),
+          itemType: item_type,
+          title,
+        };
+        if (creators?.length) payload.creators = creators;
+        if (collection_keys?.length) payload.collections = collection_keys;
+        if (tags?.length) payload.tags = tags.map((tag) => ({ tag }));
+
+        const key = await zot.createItem(payload);
+        return ok(
+          `Item created: **${title}** [${key}]\n\n` +
+            `Next: call \`zotero_item\` with item_key=\`${key}\` to verify it locally.`
+        );
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
   // ── Duplicate detection ──
   server.tool(
     "zotero_duplicates",
@@ -107,17 +156,18 @@ export function registerManageTools(server: McpServer): void {
   // ── Collection management ──
   server.tool(
     "zotero_manage_collections",
-    "Create collections and add/remove items from collections. Requires Zotero Web API.",
+    "Create, rename, move, delete collections and add/remove items. Requires the Zotero MCP Local Bridge plugin.",
     {
       action: z
-        .enum(["create", "add_items", "remove_items"])
+        .enum(["create", "rename", "move", "delete", "add_items", "remove_items"])
         .describe("Action to perform"),
       name: z.string().optional().describe("Collection name (for create action)"),
-      parent_key: z.string().optional().describe("Parent collection key (for create, to nest under)"),
+      parent_key: z.string().optional().describe("Parent collection key (for create/move, to nest under)"),
       collection_key: z.string().optional().describe("Target collection key (for add_items/remove_items)"),
       item_keys: z.array(z.string()).optional().describe("Item keys to add/remove"),
+      confirm: z.boolean().default(false).describe("Required true for delete action"),
     },
-    async ({ action, name, parent_key, collection_key, item_keys }) => {
+    async ({ action, name, parent_key, collection_key, item_keys, confirm }) => {
       try {
         if (action === "create") {
           if (!name) return fail(new Error("name is required for create action"));
@@ -126,6 +176,37 @@ export function registerManageTools(server: McpServer): void {
             `Collection created: **${name}** [${key}]` +
               (parent_key ? ` (under ${parent_key})` : "")
           );
+        }
+
+        if (action === "rename") {
+          if (!collection_key || !name) {
+            return fail(new Error("collection_key and name are required for rename action"));
+          }
+          await zot.updateCollectionFields(collection_key, { name });
+          return ok(`Renamed collection [${collection_key}] to **${name}**`);
+        }
+
+        if (action === "move") {
+          if (!collection_key) return fail(new Error("collection_key is required for move action"));
+          await zot.updateCollectionFields(collection_key, { parentCollection: parent_key || false });
+          return ok(
+            parent_key
+              ? `Moved collection [${collection_key}] under [${parent_key}]`
+              : `Moved collection [${collection_key}] to library root`
+          );
+        }
+
+        if (action === "delete") {
+          if (!collection_key) return fail(new Error("collection_key is required for delete action"));
+          const collection = await zot.getCollection(collection_key);
+          if (!confirm) {
+            return ok(
+              `Delete preview: collection **${collection.data.name}** [${collection_key}].\n` +
+                "Run again with confirm=true to delete it."
+            );
+          }
+          await zot.deleteCollection(collection_key);
+          return ok(`Deleted collection **${collection.data.name}** [${collection_key}]`);
         }
 
         if (action === "add_items") {
@@ -151,11 +232,118 @@ export function registerManageTools(server: McpServer): void {
     }
   );
 
+  // ── Item delete ──
+  server.tool(
+    "zotero_delete_items",
+    "Delete Zotero items by key. Requires the Zotero MCP Local Bridge plugin. " +
+      "Works for regular items, notes, and attachments because they are all Zotero items.",
+    {
+      item_keys: z.array(z.string()).min(1).describe("Item keys to delete"),
+      confirm: z.boolean().default(false).describe("Required true to perform deletion"),
+      permanent: z.boolean().default(false).describe("When true, permanently erase instead of moving to Zotero trash"),
+    },
+    async ({ item_keys, confirm, permanent }) => {
+      try {
+        const items = await Promise.all(item_keys.map((key) => zot.getItem(key)));
+        if (!confirm) {
+          const lines = [
+            "# Delete Preview",
+            "",
+            "Run again with confirm=true to delete these items.",
+            "",
+          ];
+          for (const item of items) {
+            lines.push(`- [${item.key}] ${item.data.title || "Untitled"} (${item.data.itemType})`);
+          }
+          return ok(lines.join("\n"));
+        }
+
+        const deleted: string[] = [];
+        const errors: string[] = [];
+        for (const item of items) {
+          try {
+            await zot.deleteItem(item.key, permanent);
+            deleted.push(`${item.key}: ${item.data.title || "Untitled"}`);
+          } catch (e) {
+            errors.push(`${item.key}: ${errorMessage(e)}`);
+          }
+        }
+
+        const lines = [
+          "# Delete Items",
+          `- **Requested:** ${item_keys.length}`,
+          `- **Deleted:** ${deleted.length}`,
+        ];
+        if (deleted.length) {
+          lines.push("", "## Deleted");
+          for (const item of deleted) lines.push(`- ${item}`);
+        }
+        if (errors.length) {
+          lines.push("", "## Errors");
+          for (const err of errors) lines.push(`- ${err}`);
+        }
+        return ok(lines.join("\n"));
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
+  server.tool(
+    "zotero_move_items",
+    "Copy or move items between Zotero collections. Requires the Zotero MCP Local Bridge plugin.",
+    {
+      item_keys: z.array(z.string()).min(1).describe("Item keys to copy or move"),
+      target_collection_key: z.string().describe("Destination collection key"),
+      source_collection_key: z.string().optional().describe("Source collection key; required for move mode"),
+      mode: z.enum(["copy", "move"]).default("copy").describe("copy adds to target; move adds to target and removes from source"),
+      confirm: z.boolean().default(false).describe("Required true to apply the change"),
+    },
+    async ({ item_keys, target_collection_key, source_collection_key, mode, confirm }) => {
+      try {
+        if (mode === "move" && !source_collection_key) {
+          return fail(new Error("source_collection_key is required for move mode"));
+        }
+
+        const items = await Promise.all(item_keys.map((key) => zot.getItem(key)));
+        const target = await zot.getCollection(target_collection_key);
+        const source = source_collection_key ? await zot.getCollection(source_collection_key) : null;
+
+        if (!confirm) {
+          const lines = [
+            "# Collection Transfer Preview",
+            `- **Mode:** ${mode}`,
+            `- **Target:** ${target.data.name} [${target_collection_key}]`,
+            source ? `- **Source:** ${source.data.name} [${source_collection_key}]` : "",
+            `- **Items:** ${items.length}`,
+            "",
+            "Run again with confirm=true to apply this change.",
+            "",
+            "## Items",
+          ].filter(Boolean);
+          for (const item of items) lines.push(`- [${item.key}] ${item.data.title || "Untitled"}`);
+          return ok(lines.join("\n"));
+        }
+
+        await zot.addToCollection(target_collection_key, item_keys);
+        if (mode === "move" && source_collection_key) {
+          await zot.removeFromCollection(source_collection_key, item_keys);
+        }
+
+        return ok(
+          `${mode === "move" ? "Moved" : "Copied"} ${item_keys.length} item(s) ` +
+            `to **${target.data.name}** [${target_collection_key}]`
+        );
+      } catch (e) {
+        return fail(e);
+      }
+    }
+  );
+
   // ── Item metadata update ──
   server.tool(
     "zotero_update",
-    "Update metadata fields of a Zotero item. Requires Zotero Web API. " +
-      "After update, sync Zotero desktop to see changes locally.",
+    "Update metadata fields of a Zotero item. Requires the Zotero MCP Local Bridge plugin.",
     {
       item_key: z.string().describe("Item key to update"),
       title: z.string().optional().describe("New title"),
@@ -193,8 +381,7 @@ export function registerManageTools(server: McpServer): void {
 
         const updated = Object.keys(fields).join(", ");
         return ok(
-          `Item [${item_key}] updated: ${updated}\n\n` +
-            "请在 Zotero 中同步以查看本地更新。"
+          `Item [${item_key}] updated locally: ${updated}`
         );
       } catch (e) {
         return fail(e);

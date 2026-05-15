@@ -9,10 +9,10 @@ import { ok, fail, suggestNext } from "../formatters.js";
 export function registerImportTools(server: McpServer): void {
   server.tool(
     "zotero_add",
-    "Import a paper into Zotero by DOI. Fetches metadata from CrossRef and attempts to download the OA PDF " +
+      "Import a paper into Zotero by DOI. Fetches metadata from CrossRef and attempts to download the OA PDF " +
       "(Unpaywall → Semantic Scholar → PubMed Central → CrossRef). " +
       "Also supports batch import with multiple DOIs. " +
-      "Requires Zotero Web API (ZOTERO_API_KEY + ZOTERO_LIBRARY_ID).",
+      "Requires the Zotero MCP Local Bridge plugin for Zotero writes.",
     {
       doi: z.string().optional().describe("Single DOI to import (e.g. 10.1234/example)"),
       dois: z.array(z.string()).optional().describe("Batch import: array of DOIs"),
@@ -43,7 +43,7 @@ export function registerImportTools(server: McpServer): void {
             lines.push(`**${meta.title}**`);
             lines.push(`DOI: ${d} | ${meta.itemType} | ${meta.year || "n.d."}`);
 
-            // 2. Create Zotero item via Web API
+            // 2. Create Zotero item via the local bridge
             const payload = metaToZoteroPayload(meta, collection);
             if (tags?.length) {
               payload.tags = tags.map((t) => ({ tag: t }));
@@ -58,7 +58,7 @@ export function registerImportTools(server: McpServer): void {
               if (pdfSource) {
                 lines.push(`OA PDF found (${pdfSource.source}): ${pdfSource.url.slice(0, 80)}`);
 
-                // Download to temp, then attach via Web API
+                // Download to temp, then attach via the local bridge
                 const tmpDir = join("/tmp", "zotero-mcp-pdf");
                 const filename = `${d.replace(/[/\\:]/g, "_")}.pdf`;
                 const dl = await downloadPdf(pdfSource.url, tmpDir, filename);

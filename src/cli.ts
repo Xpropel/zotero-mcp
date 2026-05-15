@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Zotero CLI v3.0 — 命令行工具，直接操作本地 Zotero 文献库
+ * Zotero CLI v3.1 — 命令行工具，直接操作本地 Zotero 文献库
  *
  * 命令：
  *   search      搜索文献
@@ -61,7 +61,7 @@ function shortAuthors(creators?: Array<{ firstName?: string; lastName?: string; 
 
 const program = new Command();
 program
-  .name("zotero")
+  .name("zotero_manager")
   .description("Zotero 文献库命令行工具 v3.1")
   .version("3.1.0");
 
@@ -290,7 +290,7 @@ program
       const result = await zot.createItemNote(itemKey, html, opts.tags ?? []);
       console.log(`${c.green}✓${c.reset} Note created for "${parent.data.title || itemKey}"`);
       console.log(`  Method: ${result.via}`);
-      if (result.key !== "created-via-connector") console.log(`  Key: ${result.key}`);
+      console.log(`  Key: ${result.key}`);
     } catch (e) {
       console.error(`${c.red}Error: ${e instanceof Error ? e.message : e}${c.reset}`);
       process.exit(1);
@@ -382,8 +382,8 @@ program
 
       console.log(`\n${c.bold}Batch Tag${c.reset}: ${items.length} items matched\n`);
 
-      if (!zot.hasWebApi()) {
-        console.log(`${c.yellow}Preview only (Web API required for writes)${c.reset}`);
+      if (!(await zot.hasLocalBridge())) {
+        console.log(`${c.yellow}Preview only (Local Bridge plugin required for writes)${c.reset}`);
         for (const item of items) {
           console.log(`  ${c.dim}[${item.key}]${c.reset} ${item.data.title || "Untitled"}`);
         }
@@ -516,8 +516,9 @@ program
         console.log(`  ${c.yellow}⚠${c.reset} Local API: not running (SQLite fallback active)`);
       }
 
-      // Web API
-      console.log(`  ${zot.hasWebApi() ? `${c.green}✓` : `${c.dim}-`}${c.reset} Web API: ${zot.hasWebApi() ? "configured" : "not configured"}`);
+      // Local Bridge
+      const bridgeReady = await zot.hasLocalBridge();
+      console.log(`  ${bridgeReady ? `${c.green}✓` : `${c.dim}-`}${c.reset} Local Bridge: ${bridgeReady ? "loaded" : "not loaded"}`);
 
       // PaddleOCR
       const ocrUrl = process.env.PADDLEOCR_API_URL || "https://32h7fan0h9tfqep6.aistudio-app.com/layout-parsing";
