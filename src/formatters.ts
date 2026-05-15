@@ -6,7 +6,7 @@ import {
   resolveItemFiles,
 } from "./utils.js";
 import { getAttachmentsForParents } from "./local-db.js";
-import type { ZoteroItem, ZoteroAnnotationData, ItemFiles } from "./types.js";
+import type { ZoteroItem, ZoteroAnnotationData, ItemFiles, FileInventoryEntry } from "./types.js";
 
 // ── Response helpers ──
 
@@ -44,20 +44,20 @@ function shortAuthors(creators?: Array<{ firstName?: string; lastName?: string; 
 export function suggestNext(context: string): string {
   const hints: Record<string, string> = {
     search:
-      "**suggested_next:** `zotero_item` 查看详情 → `zotero_fulltext` 读取全文 → `zotero_ocr` 转换 PDF",
+      "**suggested_next:** `zotero_item` 查看文件库存 → `zotero_read_file` 读取 MD/TXT → `zotero_ocr` 转换 PDF",
     item:
-      "**suggested_next:** `zotero_fulltext` 读取全文 → `zotero_create_note` 保存笔记 → `zotero_export` 导出 BibTeX",
+      "**suggested_next:** `zotero_read_file` 读取 MD/TXT → `zotero_create_note` 保存笔记 → `zotero_manage_files` 补充 MD/TXT",
     item_no_ocr:
-      "**suggested_next:** `zotero_ocr` 转换 PDF → `zotero_fulltext` 读取全文 → `zotero_create_note` 保存笔记",
+      "**suggested_next:** `zotero_ocr` 转换 PDF → `zotero_manage_files` 保存 MD/TXT → `zotero_read_file` 读取文本",
     ocr:
-      "**suggested_next:** `zotero_fulltext` 读取全文 → `zotero_create_note` 保存笔记",
+      "**suggested_next:** `zotero_read_file` 读取 MD/TXT → `zotero_create_note` 保存笔记",
     note_created:
       "**suggested_next:** `zotero_search_notes` 搜索笔记 → `zotero_export` 导出 BibTeX → `zotero_batch_tags` 批量打标签",
     export:
       "**suggested_next:** `zotero_search` 查找更多文献 → `zotero_batch_tags` 整理标签",
     import:
       "**suggested_next:** `zotero_item` 查看导入结果 → `zotero_ocr` 转换 PDF → `zotero_manage_collections` 整理到文件夹",
-    fulltext:
+    read_file:
       "**suggested_next:** `zotero_create_note` 保存阅读笔记 → `zotero_export` 导出 BibTeX",
   };
   return hints[context] || "";
@@ -91,12 +91,7 @@ export function fmtSearchList(items: ZoteroItem[], title: string): string {
 // ── Comprehensive item format (everything in one response) ──
 
 export interface ComprehensiveData {
-  pdfPath?: string;
-  txtPath?: string;
-  txtSize?: number;
-  mdPath?: string;
-  mdSize?: number;
-  pdfFilename?: string;
+  fileInventory: FileInventoryEntry[];
   notes: ZoteroItem[];
   annotations: Array<ZoteroAnnotationData & { key?: string }>;
 }
@@ -143,34 +138,21 @@ export function fmtComprehensiveItem(item: ZoteroItem, extra: ComprehensiveData)
     lines.push("", "## Abstract", d.abstractNote);
   }
 
-  // Files section
-  lines.push("", "## Files");
-  if (extra.pdfPath) {
-    lines.push(`📄 **PDF:** ${extra.pdfPath}`);
-  } else {
-    lines.push("📄 **PDF:** Not found");
-  }
-
+  lines.push("", "## File Inventory");
   let hasReadableText = false;
-
-  if (extra.mdPath) {
-    const sizeKB = extra.mdSize ? ` (${(extra.mdSize / 1024).toFixed(1)} KB)` : "";
-    lines.push(`📘 **Markdown:** ${extra.mdPath}${sizeKB}`);
-    lines.push("→ 全文已转换为 Markdown，可直接读取（保留标题、表格等结构）");
-    hasReadableText = true;
-  }
-
-  if (extra.txtPath) {
-    const sizeKB = extra.txtSize ? ` (${(extra.txtSize / 1024).toFixed(1)} KB)` : "";
-    lines.push(`📝 **TXT:** ${extra.txtPath}${sizeKB}`);
-    if (!hasReadableText) {
-      lines.push("→ 全文已转换，可直接读取 TXT 文件");
-      hasReadableText = true;
+  if (!extra.fileInventory.length) {
+    lines.push("No attachments found.");
+  } else {
+    lines.push("| Attachment | PDF | MD | TXT |");
+    lines.push("|---|---:|---:|---:|");
+    for (const entry of extra.fileInventory) {
+      const f = entry.files;
+      if (f.hasMd || f.hasTxt) hasReadableText = true;
+      lines.push(`| [${entry.attachmentKey}] ${entry.title} | ${f.hasPdf ? "yes" : "no"} | ${f.hasMd ? "yes" : "no"} | ${f.hasTxt ? "yes" : "no"} |`);
+      if (f.pdfPath) lines.push(`| PDF path |  |  | ${f.pdfPath} |`);
+      if (f.mdPath) lines.push(`| MD path |  |  | ${f.mdPath}${f.mdSize ? ` (${(f.mdSize / 1024).toFixed(1)} KB)` : ""} |`);
+      if (f.txtPath) lines.push(`| TXT path |  |  | ${f.txtPath}${f.txtSize ? ` (${(f.txtSize / 1024).toFixed(1)} KB)` : ""} |`);
     }
-  }
-
-  if (!hasReadableText && extra.pdfPath) {
-    lines.push("📝 **TXT/MD:** 尚未转换 — 使用 `zotero_ocr` 进行 OCR 转换");
   }
 
   // Notes

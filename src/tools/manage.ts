@@ -61,9 +61,9 @@ export function registerManageTools(server: McpServer): void {
       "Returns groups of potential duplicates for review.",
     {
       scope: z
-        .enum(["all", "collection", "recent"])
-        .default("recent")
-        .describe("Scope: all (entire library), collection (specific), or recent (last 100 added)"),
+        .enum(["all", "collection"])
+        .default("all")
+        .describe("Scope: all (bounded by limit) or collection"),
       collection_key: z.string().optional().describe("Collection key (when scope=collection)"),
       limit: z.number().default(100).describe("Max items to scan"),
     },
@@ -73,10 +73,8 @@ export function registerManageTools(server: McpServer): void {
 
         if (scope === "collection" && collection_key) {
           items = await zot.getCollectionItems(collection_key, limit);
-        } else if (scope === "all") {
-          items = await zot.getItems({ limit, sort: "dateAdded", direction: "desc", itemType: "-attachment" });
         } else {
-          items = await zot.getItems({ limit: Math.min(limit, 100), sort: "dateAdded", direction: "desc", itemType: "-attachment" });
+          items = await zot.getItems({ limit, sort: "title", direction: "asc", itemType: "-attachment" });
         }
 
         // Build DOI index and title index

@@ -166,3 +166,11 @@ export interface ItemFiles {
   mdPath?: string;
   mdSize?: number;
 }
+
+export interface FileInventoryEntry {
+  attachmentKey: string;
+  title: string;
+  filename: string;
+  contentType: string;
+  files: ItemFiles;
+}

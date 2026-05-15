@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Zotero CLI v3.1 — 命令行工具，直接操作本地 Zotero 文献库
+ * Zotero CLI v3.3 — 命令行工具，直接操作本地 Zotero 文献库
  *
  * 命令：
  *   search      搜索文献
@@ -14,7 +14,6 @@
  *   tag         批量打标签
  *   export      导出 BibTeX
  *   libraries   列出库
- *   feeds       查看 RSS
  *   status      系统状态
  */
 
@@ -62,8 +61,8 @@ function shortAuthors(creators?: Array<{ firstName?: string; lastName?: string; 
 const program = new Command();
 program
   .name("zotero_manager")
-  .description("Zotero 文献库命令行工具 v3.1")
-  .version("3.1.0");
+  .description("Zotero 文献库命令行工具 v3.3")
+  .version("3.3.0");
 
 // ── search ──
 program
@@ -439,11 +438,10 @@ program
 // ── libraries ──
 program
   .command("libraries")
-  .description("列出所有库和 RSS 订阅")
+  .description("列出所有 Zotero 库")
   .action(async () => {
     try {
       const libs = localDb.getLibraries();
-      const feeds = localDb.getFeeds();
 
       console.log(`\n${c.bold}Zotero Libraries${c.reset}\n`);
       for (const lib of libs) {
@@ -454,38 +452,7 @@ program
         }
       }
 
-      if (feeds.length) {
-        console.log(`\n${c.bold}RSS Feeds${c.reset}\n`);
-        for (const f of feeds) {
-          console.log(`  ${c.yellow}${f.name}${c.reset} ${c.dim}(ID: ${f.libraryID}, ${f.itemCount} items)${c.reset}`);
-          console.log(`    ${c.dim}${f.url}${c.reset}`);
-        }
-      }
       console.log();
-    } catch (e) {
-      console.error(`${c.red}Error: ${e instanceof Error ? e.message : e}${c.reset}`);
-      process.exit(1);
-    }
-  });
-
-// ── feeds ──
-program
-  .command("feeds <library_id>")
-  .description("查看 RSS 订阅内容")
-  .option("-n, --limit <n>", "最大条目数", "20")
-  .action(async (libraryId, opts) => {
-    try {
-      const feeds = localDb.getFeeds();
-      const name = feeds.find((f) => f.libraryID === Number(libraryId))?.name || `Feed ${libraryId}`;
-      const items = localDb.getFeedItems(Number(libraryId), Number(opts.limit));
-
-      console.log(`\n${c.bold}Feed: ${name}${c.reset} (${items.length} items)\n`);
-      for (const item of items) {
-        console.log(`  ${c.bold}${item.title || "Untitled"}${c.reset}`);
-        if (item.creators) console.log(`    ${c.dim}${item.creators}${c.reset}`);
-        if (item.url) console.log(`    ${c.dim}${item.url}${c.reset}`);
-        console.log();
-      }
     } catch (e) {
       console.error(`${c.red}Error: ${e instanceof Error ? e.message : e}${c.reset}`);
       process.exit(1);
@@ -603,10 +570,10 @@ program
     }
   });
 
-// ── fulltext ──
+// ── read-file ──
 program
-  .command("fulltext <key>")
-  .description("读取文献全文 (MD > TXT > Zotero 索引)")
+  .command("read-file <key>")
+  .description("读取条目下已保存的 MD/TXT 文本文件")
   .option("-s, --source <src>", "指定来源 (auto|md|txt|index)", "auto")
   .option("-n, --max <n>", "最大字符数", "5000")
   .action(async (key, opts) => {
@@ -629,7 +596,7 @@ program
 
       if (!text) {
         console.log(`${c.yellow}⚠ 无可读全文${c.reset}`);
-        if (files.pdfPath) console.log(`PDF: ${files.pdfPath}\n运行: zotero ocr ${key}`);
+        if (files.pdfPath) console.log(`PDF: ${files.pdfPath}\n运行: zotero ocr ${key} 或使用 zotero_manage_files 保存 MD/TXT`);
         return;
       }
 
@@ -652,12 +619,11 @@ program
   .option("-c, --collection <key>", "限定文件夹")
   .action(async (opts) => {
     try {
-      const scope = opts.collection ? "collection" : "recent";
       let items;
       if (opts.collection) {
         items = await zot.getCollectionItems(opts.collection, Number(opts.limit));
       } else {
-        items = await zot.getItems({ limit: Number(opts.limit), sort: "dateAdded", direction: "desc", itemType: "-attachment" });
+        items = await zot.getItems({ limit: Number(opts.limit), sort: "title", direction: "asc", itemType: "-attachment" });
       }
 
       const doiGroups = new Map<string, typeof items>();
@@ -694,43 +660,6 @@ program
       }
 
       if (!found) console.log(`  ${c.green}✓${c.reset} No duplicates found`);
-      console.log();
-    } catch (e) {
-      console.error(`${c.red}Error: ${e instanceof Error ? e.message : e}${c.reset}`);
-      process.exit(1);
-    }
-  });
-
-// ── recent ──
-program
-  .command("recent")
-  .description("最近添加的文献")
-  .option("-n, --limit <n>", "数量", "10")
-  .option("-d, --days <n>", "最近 N 天内")
-  .action(async (opts) => {
-    try {
-      let items = await zot.getItems({ limit: Number(opts.limit), sort: "dateAdded", direction: "desc", itemType: "-attachment" });
-      if (opts.days) {
-        const cutoff = new Date();
-        cutoff.setDate(cutoff.getDate() - Number(opts.days));
-        items = items.filter((it) => it.data.dateAdded ? new Date(it.data.dateAdded) >= cutoff : false);
-      }
-
-      const keys = items.map((i) => i.key);
-      const attRows = localDb.getAttachmentsForParents(keys);
-      const fileMap = new Map();
-      for (const row of attRows) {
-        if (fileMap.has(row.parentKey)) continue;
-        fileMap.set(row.parentKey, resolveItemFiles(row.attachmentKey, row.path ?? undefined));
-      }
-
-      console.log(`\n${c.bold}Recent Items${c.reset} (${items.length})\n`);
-      for (let i = 0; i < items.length; i++) {
-        const d = items[i].data;
-        const files = fileMap.get(items[i].key) ?? { hasPdf: false, hasTxt: false, hasMd: false };
-        console.log(`  ${c.dim}${String(i + 1).padStart(2)}.${c.reset} ${c.bold}${d.title || "Untitled"}${c.reset} ${c.dim}[${items[i].key}]${c.reset} ${fileTag(files)}`);
-        console.log(`      ${c.dim}${shortAuthors(d.creators)} · ${d.date || "n.d."} · Added: ${d.dateAdded?.slice(0, 10) || "?"}${c.reset}`);
-      }
       console.log();
     } catch (e) {
       console.error(`${c.red}Error: ${e instanceof Error ? e.message : e}${c.reset}`);

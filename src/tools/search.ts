@@ -1,15 +1,14 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import * as zot from "../zotero-client.js";
-import { ok, fail, fmtSearchList, suggestNext } from "../formatters.js";
+import { ok, fail, fmtSearchList } from "../formatters.js";
 import type { ZoteroItem } from "../types.js";
 
 export function registerSearchTools(server: McpServer): void {
   server.tool(
     "zotero_search",
-    "Search Zotero library with advanced filtering. Returns a lean list with PDF/TXT/MD availability. " +
-      "Supports keyword search, tag filtering, year range, item type, and collection scope. " +
-      "Use zotero_item for full details, zotero_fulltext to read content.",
+    "Search Zotero library with practical filters. Returns a concise list with available PDF/MD/TXT file indicators. " +
+      "Use zotero_item for one item inventory and zotero_read_file to read saved MD/TXT text.",
     {
       query: z.string().optional().describe("Search keyword (omit to browse all / filter by other criteria)"),
       tag: z.array(z.string()).optional().describe("Filter by tags (OR logic: matches any)"),
@@ -79,45 +78,9 @@ export function registerSearchTools(server: McpServer): void {
         if (tag?.length) parts.push(`tags: ${tag.join(", ")}`);
         if (year_from || year_to) parts.push(`${year_from || "..."}–${year_to || "..."}`);
         if (item_type) parts.push(`type: ${item_type}`);
-        const title = parts.length
-          ? `Search: ${parts.join(" | ")}`
-          : collection_key
-            ? "Collection Items"
-            : "Recent Items";
+        const title = parts.length ? `Search: ${parts.join(" | ")}` : "Library Items";
 
         return ok(fmtSearchList(items, title));
-      } catch (e) {
-        return fail(e);
-      }
-    }
-  );
-
-  server.tool(
-    "zotero_recent",
-    "Get recently added items. Shortcut for browsing the latest additions to your library.",
-    {
-      limit: z.number().default(10).describe("Number of recent items"),
-      days: z.number().optional().describe("Only items added within this many days"),
-    },
-    async ({ limit, days }) => {
-      try {
-        let items = await zot.getItems({
-          limit: Math.min(limit, 50),
-          sort: "dateAdded",
-          direction: "desc",
-          itemType: "-attachment",
-        });
-
-        if (days) {
-          const cutoff = new Date();
-          cutoff.setDate(cutoff.getDate() - days);
-          items = items.filter((it) => {
-            const added = it.data.dateAdded;
-            return added ? new Date(added) >= cutoff : false;
-          });
-        }
-
-        return ok(fmtSearchList(items, days ? `Added in last ${days} days` : "Recent Items"));
       } catch (e) {
         return fail(e);
       }

@@ -2,7 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import * as zot from "../zotero-client.js";
 import * as localDb from "../local-db.js";
-import { truncate, errorMessage } from "../utils.js";
+import { errorMessage } from "../utils.js";
 import { ok, fail } from "../formatters.js";
 
 export function registerLibraryTools(server: McpServer): void {
@@ -50,7 +50,7 @@ export function registerLibraryTools(server: McpServer): void {
 
   server.tool(
     "zotero_libraries",
-    "List all accessible libraries and RSS feeds, or switch the active library.",
+    "List accessible Zotero libraries, or switch the active library.",
     {
       action: z.enum(["list", "switch"]).default("list").describe("Action to perform"),
       library_id: z.number().optional().describe("Library ID (for switch action)"),
@@ -72,7 +72,6 @@ export function registerLibraryTools(server: McpServer): void {
 
       try {
         const libs = localDb.getLibraries();
-        const feeds = localDb.getFeeds();
         const lines = ["# Zotero Libraries", ""];
 
         for (const lib of libs) {
@@ -85,44 +84,6 @@ export function registerLibraryTools(server: McpServer): void {
           }
         }
 
-        if (feeds.length) {
-          lines.push("## RSS Feeds", "");
-          for (const f of feeds) {
-            lines.push(`- **${f.name}** (Library ID: ${f.libraryID}, ${f.itemCount} items)`);
-            lines.push(`  URL: ${f.url}`);
-            if (f.lastUpdate) lines.push(`  Last update: ${f.lastUpdate}`);
-            if (f.lastCheckError) lines.push(`  ⚠️ Error: ${f.lastCheckError}`);
-          }
-        }
-
-        return ok(lines.join("\n"));
-      } catch (e) { return fail(e); }
-    }
-  );
-
-  server.tool(
-    "zotero_feeds",
-    "Get items from a specific RSS feed.",
-    {
-      library_id: z.number().describe("Feed library ID (from zotero_libraries output)"),
-      limit: z.number().default(20).describe("Max items"),
-    },
-    async ({ library_id, limit }) => {
-      try {
-        const feeds = localDb.getFeeds();
-        const feedName = feeds.find((f) => f.libraryID === library_id)?.name || `Feed ${library_id}`;
-        const items = localDb.getFeedItems(library_id, limit);
-        const lines = [`# Feed: ${feedName}`, ""];
-        for (const item of items) {
-          lines.push(`## ${item.title || "Untitled"}`);
-          lines.push(`- **Key:** ${item.key}`);
-          if (item.creators) lines.push(`- **Authors:** ${item.creators}`);
-          if (item.url) lines.push(`- **URL:** ${item.url}`);
-          if (item.dateAdded) lines.push(`- **Date:** ${item.dateAdded}`);
-          if (item.abstract) lines.push(`- **Abstract:** ${truncate(item.abstract, 200)}`);
-          lines.push("");
-        }
-        if (!items.length) lines.push("No feed items found.");
         return ok(lines.join("\n"));
       } catch (e) { return fail(e); }
     }

@@ -69,7 +69,7 @@ try {
   await client.connect(transport);
   const tools = await client.listTools();
   console.log(`tools: ${tools.tools.length}`);
-  if (tools.tools.length < 25) throw new Error(`Expected at least 25 tools, got ${tools.tools.length}`);
+  if (tools.tools.length !== 23) throw new Error(`Expected 23 focused tools, got ${tools.tools.length}`);
 
   const caps = await call("zotero_capabilities", {});
   if (!caps.includes("Local bridge plugin | yes")) throw new Error("Local bridge is not loaded");
@@ -162,6 +162,26 @@ try {
     title: "updated imported attachment smoke",
     tags: ["mcp-smoke-attachment"],
   });
+  await call("zotero_manage_files", {
+    action: "write_text",
+    item_key: itemKey,
+    attachment_key: importedKey,
+    format: "md",
+    content: "# Smoke MD\n\nReadable markdown sidecar.",
+  });
+  const inventory = await call("zotero_item", { item_key: itemKey });
+  if (!inventory.includes(importedKey) || !inventory.includes("| MD |")) {
+    throw new Error("Item inventory did not report the imported attachment and MD file");
+  }
+  const mdText = await call("zotero_read_file", {
+    item_key: itemKey,
+    attachment_key: importedKey,
+    source: "md",
+  });
+  if (!mdText.includes("Readable markdown sidecar")) {
+    throw new Error("zotero_read_file did not return the saved MD sidecar");
+  }
+  console.log("file inventory/write/read: ok");
   const attachments = await call("zotero_manage_attachments", { action: "list", parent_item_key: itemKey });
   if (!attachments.includes(importedKey) || !attachments.includes(linkedKey)) {
     throw new Error("Attachment list did not include both smoke attachments");
