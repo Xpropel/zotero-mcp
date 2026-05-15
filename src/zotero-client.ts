@@ -4,24 +4,21 @@ import type {
   ZoteroFulltext,
   AttachmentInfo,
   ActiveLibrary,
+  RuntimeCapabilities,
 } from "./types.js";
 import { resolveAttachmentPath } from "./utils.js";
 import * as sql from "./sql-fallback.js";
+import * as bridge from "./local-bridge.js";
 
 const LOCAL_PORT = 23119;
 const LOCAL = `http://127.0.0.1:${LOCAL_PORT}`;
-const WEB = "https://api.zotero.org";
 const TIMEOUT = 15_000;
 const BBT_TIMEOUT = 5_000;
 
 let activeLib: ActiveLibrary = { libraryId: "0", libraryType: "user" };
 
-const webKey = process.env.ZOTERO_API_KEY || "";
-const webLibId = process.env.ZOTERO_LIBRARY_ID || "";
-const webLibType = process.env.ZOTERO_LIBRARY_TYPE || "user";
-
-export function hasWebApi(): boolean {
-  return !!(webKey && webLibId);
+export async function hasLocalBridge(): Promise<boolean> {
+  return bridge.hasBridge();
 }
 
 export function setActiveLibrary(id: string, type: string): void {
@@ -35,11 +32,6 @@ export function clearActiveLibrary(): void {
 function localBase(): string {
   const prefix = activeLib.libraryType === "group" ? "groups" : "users";
   return `${LOCAL}/api/${prefix}/${activeLib.libraryId}`;
-}
-
-function webBase(): string {
-  const prefix = webLibType === "group" ? "groups" : "users";
-  return `${WEB}/${prefix}/${webLibId}`;
 }
 
 // ── HTTP helpers ──
@@ -76,82 +68,11 @@ async function tryLocalOrSql<T>(apiCall: () => Promise<T>, sqlFallback: () => T)
   }
 }
 
-function webHeaders(): Record<string, string> {
-  return {
-    "Content-Type": "application/json",
-    "Zotero-API-Key": webKey,
-    "Zotero-API-Version": "3",
-  };
-}
-
-async function webPost(path: string, body: unknown): Promise<unknown> {
-  if (!hasWebApi()) throw new Error("Zotero Web API not configured (set ZOTERO_API_KEY + ZOTERO_LIBRARY_ID)");
-  const res = await fetchT(`${webBase()}${path}`, {
-    method: "POST",
-    headers: webHeaders(),
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const t = await res.text().catch(() => "");
-    throw new Error(`Zotero Web API POST ${res.status}: ${t || res.statusText}`);
-  }
-  return res.headers.get("content-type")?.includes("json") ? res.json() : {};
-}
-
-async function webPatch(path: string, body: unknown, version: number): Promise<void> {
-  if (!hasWebApi()) throw new Error("Zotero Web API not configured (set ZOTERO_API_KEY + ZOTERO_LIBRARY_ID)");
-  const res = await fetchT(`${webBase()}${path}`, {
-    method: "PATCH",
-    headers: { ...webHeaders(), "If-Unmodified-Since-Version": String(version) },
-    body: JSON.stringify(body),
-  });
-  if (!res.ok) {
-    const t = await res.text().catch(() => "");
-    throw new Error(`Zotero Web API PATCH ${res.status}: ${t || res.statusText}`);
-  }
-}
-
-async function webGet<T>(path: string): Promise<T> {
-  if (!hasWebApi()) throw new Error("Zotero Web API not configured (set ZOTERO_API_KEY + ZOTERO_LIBRARY_ID)");
-  const res = await fetchT(`${webBase()}${path}`, { headers: { ...webHeaders(), Accept: "application/json" } });
-  if (!res.ok) {
-    const t = await res.text().catch(() => "");
-    throw new Error(`Zotero Web API GET ${res.status}: ${t || res.statusText}`);
-  }
-  return (await res.json()) as T;
-}
-
-function extractCreatedKey(result: unknown): string {
-  const r = result as {
-    successful?: Record<string, { key: string }>;
-    success?: Record<string, string>;
-  };
-  if (r.successful) {
-    const first = Object.values(r.successful)[0];
-    if (first?.key) return first.key;
-  }
-  if (r.success) {
-    const first = Object.values(r.success)[0];
-    if (first) return first;
-  }
-  return "created";
-}
-
-/** How `zotero_create_note` chooses between local Connector and Web API. */
+/** How `zotero_create_note` reports local bridge writes. */
 export type CreateNoteResult = {
-             key: string;
-             via: "connector" | "web";
-             /** Present when using Connector: Zotero ignores `parentItem` on standalone notes. */
-             connectorParentIgnored?: boolean;
-           };
-
-type NotesWriteMode = "auto" | "local" | "web";
-
-function getNotesWriteMode(): NotesWriteMode {
-  const v = (process.env.ZOTERO_NOTES_WRITE_MODE || "auto").toLowerCase();
-  if (v === "local" || v === "web" || v === "auto") return v;
-  return "auto";
-}
+  key: string;
+  via: "bridge";
+};
 
 // ── Read: items ──
 
@@ -276,6 +197,26 @@ export function findBestAttachment(children: ZoteroItem[]): AttachmentInfo | nul
   };
 }
 
+export function listAttachmentsFromChildren(children: ZoteroItem[]): AttachmentInfo[] {
+  return children
+    .filter((c) => c.data.itemType === "attachment")
+    .map((att) => {
+      const rawPath = att.data.path;
+      const filePath = resolveAttachmentPath(att.key, typeof rawPath === "string" ? rawPath : undefined);
+      return {
+        key: att.key,
+        title: att.data.title || "Untitled",
+        filename: att.data.filename || "",
+        contentType: att.data.contentType || "",
+        path: filePath ?? undefined,
+      };
+    });
+}
+
+export async function getItemAttachments(parentKey: string): Promise<AttachmentInfo[]> {
+  return listAttachmentsFromChildren(await getItemChildren(parentKey));
+}
+
 // ── Write: notes ──
 
 export async function createItemNote(
@@ -289,73 +230,36 @@ export async function createItemNote(
     note: noteHtml,
     tags: tags.map((t) => ({ tag: t })),
   };
+  const created = await bridge.bridgePost<bridge.BridgeObjectResult>("/items/create", { item: noteData }, activeLib);
+  return { key: created.key, via: "bridge" };
+}
 
-  async function postConnector(): Promise<Response> {
-    return fetchT(`${LOCAL}/connector/saveItems`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ items: [{ ...noteData, tags }], uri: "about:blank" }),
-    });
-  }
+export async function updateNote(noteKey: string, noteHtml: string, tags?: string[]): Promise<void> {
+  const fields: Record<string, unknown> = { note: noteHtml };
+  if (tags) fields.tags = tags.map((tag) => ({ tag }));
+  await updateItemFields(noteKey, fields);
+}
 
-  const mode = getNotesWriteMode();
-
-  if (mode === "web") {
-    if (!hasWebApi()) {
-      throw new Error(
-        "ZOTERO_NOTES_WRITE_MODE=web requires ZOTERO_API_KEY and ZOTERO_LIBRARY_ID"
-      );
-    }
-    const key = extractCreatedKey(await webPost("/items", [noteData]));
-    return { key, via: "web" };
-  }
-
-  if (mode === "local") {
-    const res = await postConnector();
-    if (!res.ok) {
-      const t = await res.text().catch(() => "");
-      throw new Error(
-        `ZOTERO_NOTES_WRITE_MODE=local: connector failed (HTTP ${res.status}). Is Zotero running with connector enabled? ${t || res.statusText}`
-      );
-    }
-    // Zotero.Translate.ItemSaver._saveNote() does not read `parentItem` from JSON for a standalone
-    // note; only an explicit parentItemID (child notes array) works. Connector saveItems uses that path.
-    return {
-      key: "created-via-connector",
-      via: "connector",
-      connectorParentIgnored: true,
-    };
-  }
-
-  // auto: use Web API when available so `parentItem` is honored (child note under the entry).
-  // Connector cannot attach standalone notes to a parent — they land in the save-target collection.
-  if (hasWebApi()) {
-    const key = extractCreatedKey(await webPost("/items", [noteData]));
-    return { key, via: "web" };
-  }
-
-  const res = await postConnector();
-  if (res.ok) {
-    return {
-      key: "created-via-connector",
-      via: "connector",
-      connectorParentIgnored: true,
-    };
-  }
-
-  const t = await res.text().catch(() => "");
-  throw new Error(
-    `Connector saveItems ${res.status}: ${t || res.statusText}. Start Zotero, or set ZOTERO_API_KEY + ZOTERO_LIBRARY_ID (or ZOTERO_NOTES_WRITE_MODE=web).`
-  );
+export async function appendToNote(noteKey: string, noteHtml: string): Promise<void> {
+  const note = await getItem(noteKey);
+  if (note.data.itemType !== "note") throw new Error(`Item is not a note: ${noteKey}`);
+  const current = typeof note.data.note === "string" ? note.data.note : "";
+  await updateItemFields(noteKey, { note: current + noteHtml });
 }
 
 // ── Write: create item ──
 
 export async function createItem(payload: Record<string, unknown>): Promise<string> {
-  if (!hasWebApi()) {
-    throw new Error("Creating items requires the Zotero Web API.\nSet ZOTERO_API_KEY and ZOTERO_LIBRARY_ID.");
+  const created = await bridge.bridgePost<bridge.BridgeObjectResult>("/items/create", { item: payload }, activeLib);
+  return created.key;
+}
+
+export async function createItems(payloads: Array<Record<string, unknown>>): Promise<string[]> {
+  const keys: string[] = [];
+  for (const payload of payloads) {
+    keys.push(await createItem(payload));
   }
-  return extractCreatedKey(await webPost("/items", [payload]));
+  return keys;
 }
 
 // ── Write: attachments ──
@@ -366,154 +270,175 @@ export async function uploadAttachment(
   contentType: string,
   filename: string
 ): Promise<string> {
-  if (!hasWebApi()) throw new Error("Uploading attachments requires Zotero Web API.");
-
-  // Step 1: Create attachment item
-  const attPayload = {
-    itemType: "attachment",
-    parentItem: parentKey,
-    linkMode: "imported_file",
+  const created = await bridge.bridgePost<bridge.BridgeObjectResult>("/attachments/import-file", {
+    parentKey,
+    filePath,
     title: filename,
     contentType,
-    filename,
-  };
-  const attKey = extractCreatedKey(await webPost("/items", [attPayload]));
-
-  // Step 2: Upload file content
-  const { readFileSync, statSync } = await import("node:fs");
-  const fileContent = readFileSync(filePath);
-  const md5 = await computeMd5(fileContent);
-  const size = statSync(filePath).size;
-
-  // Get upload authorization
-  const authRes = await fetchT(`${webBase()}/items/${attKey}/file`, {
-    method: "POST",
-    headers: {
-      ...webHeaders(),
-      "Content-Type": "application/x-www-form-urlencoded",
-      "If-None-Match": "*",
-    },
-    body: `md5=${md5}&filename=${encodeURIComponent(filename)}&filesize=${size}&mtime=${Date.now()}`,
-  });
-
-  if (!authRes.ok) {
-    const t = await authRes.text().catch(() => "");
-    throw new Error(`Upload auth failed ${authRes.status}: ${t}`);
-  }
-
-  const auth = (await authRes.json()) as { exists?: boolean; url?: string; contentType?: string; prefix?: string; suffix?: string; uploadKey?: string };
-  if (auth.exists) return attKey; // File already exists
-
-  if (auth.url) {
-    // Upload file
-    const body = Buffer.concat([
-      Buffer.from(auth.prefix || "", "utf-8"),
-      fileContent,
-      Buffer.from(auth.suffix || "", "utf-8"),
-    ]);
-    const upRes = await fetchT(auth.url, {
-      method: "POST",
-      headers: { "Content-Type": auth.contentType || "application/octet-stream" },
-      body,
-    }, 60_000);
-
-    if (!upRes.ok) throw new Error(`File upload failed: ${upRes.status}`);
-
-    // Register upload
-    await fetchT(`${webBase()}/items/${attKey}/file`, {
-      method: "POST",
-      headers: {
-        ...webHeaders(),
-        "Content-Type": "application/x-www-form-urlencoded",
-        "If-None-Match": "*",
-      },
-      body: `upload=${auth.uploadKey}`,
-    });
-  }
-
-  return attKey;
+  }, activeLib);
+  return created.key;
 }
 
-async function computeMd5(data: Buffer): Promise<string> {
-  const { createHash } = await import("node:crypto");
-  return createHash("md5").update(data).digest("hex");
+export async function linkLocalFileAttachment(
+  parentKey: string,
+  filePath: string,
+  contentType: string,
+  title: string
+): Promise<string> {
+  const created = await bridge.bridgePost<bridge.BridgeObjectResult>("/attachments/link-file", {
+    parentKey,
+    filePath,
+    title,
+    contentType,
+  }, activeLib);
+  return created.key;
 }
 
 export async function createLinkedUrlAttachment(
   parentKey: string,
   url: string,
-  title: string
+  title: string,
+  contentType = "application/pdf"
 ): Promise<string> {
-  if (!hasWebApi()) throw new Error("Creating attachments requires Zotero Web API.");
-  return extractCreatedKey(
-    await webPost("/items", [{
-      itemType: "attachment",
-      parentItem: parentKey,
-      linkMode: "linked_url",
-      title,
-      url,
-      contentType: "application/pdf",
-    }])
-  );
+  const created = await bridge.bridgePost<bridge.BridgeObjectResult>("/attachments/link-url", {
+    parentKey,
+    url,
+    title,
+    contentType,
+  }, activeLib);
+  return created.key;
+}
+
+export async function updateAttachmentFields(
+  key: string,
+  fields: { title?: string; tags?: string[] }
+): Promise<void> {
+  const patch: Record<string, unknown> = {};
+  if (fields.title !== undefined) patch.title = fields.title;
+  if (fields.tags !== undefined) patch.tags = fields.tags.map((tag) => ({ tag }));
+  if (!Object.keys(patch).length) throw new Error("No attachment fields to update");
+  await updateItemFields(key, patch);
 }
 
 // ── Write: collections ──
 
 export async function createCollection(name: string, parentKey?: string): Promise<string> {
-  if (!hasWebApi()) throw new Error("Creating collections requires Zotero Web API.");
-  const payload: Record<string, unknown> = { name };
-  if (parentKey) payload.parentCollection = parentKey;
-  const result = await webPost("/collections", [payload]);
-  return extractCreatedKey(result);
+  const created = await bridge.bridgePost<bridge.BridgeObjectResult>(
+    "/collections/create",
+    { name, parentKey },
+    activeLib
+  );
+  return created.key;
+}
+
+export async function updateCollectionFields(
+  key: string,
+  fields: { name?: string; parentCollection?: string | false }
+): Promise<void> {
+  await bridge.bridgePost("/collections/update", { collectionKey: key, fields }, activeLib);
+}
+
+export async function deleteCollection(key: string): Promise<void> {
+  await bridge.bridgePost("/collections/delete", { collectionKey: key }, activeLib);
 }
 
 export async function addToCollection(collectionKey: string, itemKeys: string[]): Promise<void> {
-  // Read each item, add collection, patch
-  for (const key of itemKeys) {
-    const item = await webGet<ZoteroItem>(`/items/${encodeURIComponent(key)}`);
-    const collections = new Set<string>(item.data.collections || []);
-    if (collections.has(collectionKey)) continue;
-    collections.add(collectionKey);
-    await webPatch(`/items/${encodeURIComponent(key)}`, { collections: [...collections] }, item.version);
-  }
+  await bridge.bridgePost("/collections/add-items", { collectionKey, itemKeys }, activeLib);
 }
 
 export async function removeFromCollection(collectionKey: string, itemKeys: string[]): Promise<void> {
-  for (const key of itemKeys) {
-    const item = await webGet<ZoteroItem>(`/items/${encodeURIComponent(key)}`);
-    const collections = (item.data.collections || []).filter((c: string) => c !== collectionKey);
-    await webPatch(`/items/${encodeURIComponent(key)}`, { collections }, item.version);
-  }
+  await bridge.bridgePost("/collections/remove-items", { collectionKey, itemKeys }, activeLib);
 }
 
 // ── Write: annotations ──
 
 export async function createAnnotationItem(attachmentKey: string, annotation: Record<string, unknown>): Promise<string> {
-  if (!hasWebApi()) {
-    throw new Error("Creating annotations requires the Zotero Web API.\nSet ZOTERO_API_KEY and ZOTERO_LIBRARY_ID.");
-  }
-  return extractCreatedKey(
-    await webPost("/items", [{ itemType: "annotation", parentItem: attachmentKey, ...annotation }])
+  const created = await bridge.bridgePost<bridge.BridgeObjectResult>(
+    "/items/create",
+    { item: { itemType: "annotation", parentItem: attachmentKey, ...annotation } },
+    activeLib
   );
+  return created.key;
 }
 
 // ── Write: update item ──
 
 export async function updateItem(item: ZoteroItem): Promise<void> {
-  const path = `/items/${encodeURIComponent(item.key)}`;
-  const current = await webGet<ZoteroItem>(path);
   const { version: _v, ...dataWithoutVersion } = item.data;
-  await webPatch(path, dataWithoutVersion, current.version);
+  await bridge.bridgePost("/items/update", { itemKey: item.key, fields: dataWithoutVersion }, activeLib);
 }
 
 export async function updateItemFields(
   key: string,
   fields: Record<string, unknown>
 ): Promise<void> {
-  if (!hasWebApi()) throw new Error("Updating items requires Zotero Web API.");
-  const path = `/items/${encodeURIComponent(key)}`;
-  const current = await webGet<ZoteroItem>(path);
-  await webPatch(path, fields, current.version);
+  await bridge.bridgePost("/items/update", { itemKey: key, fields }, activeLib);
+}
+
+export async function deleteItem(key: string, permanent = false): Promise<void> {
+  await bridge.bridgePost("/items/delete", { itemKeys: [key], permanent }, activeLib);
+}
+
+export async function getItemsByTag(tag: string, limit = 500): Promise<ZoteroItem[]> {
+  return localGet<ZoteroItem[]>("/items", { tag, limit: String(limit) });
+}
+
+export async function getRuntimeCapabilities(): Promise<RuntimeCapabilities> {
+  const caps: RuntimeCapabilities = {
+    localApiRead: false,
+    localApiWrite: false,
+    localConnector: false,
+    localBridge: false,
+    sqliteFallback: false,
+  };
+
+  try {
+    sql.sqlGetItems({ limit: 1, itemType: "-attachment" });
+    caps.sqliteFallback = true;
+  } catch {
+    caps.sqliteFallback = false;
+  }
+
+  try {
+    await localGet<ZoteroItem[]>("/items", { limit: "1" });
+    caps.localApiRead = true;
+  } catch { /* sqliteFallback reports the read-only fallback state */ }
+
+  try {
+    const res = await fetchT(`${LOCAL}/connector/ping`, { headers: { Accept: "text/plain" } }, 2_000);
+    caps.localConnector = res.ok;
+  } catch {
+    caps.localConnector = false;
+  }
+
+  try {
+    const bridgePing = await bridge.pingBridge();
+    caps.localBridge = true;
+    caps.localBridgeVersion = bridgePing.version;
+    caps.zoteroVersion = bridgePing.zoteroVersion;
+  } catch {
+    caps.localBridge = false;
+  }
+
+  try {
+    const res = await fetchT(
+      `${localBase()}/items`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "[]",
+      },
+      2_000
+    );
+    caps.localApiWrite = res.ok;
+    caps.localApiWriteStatus = res.status;
+    if (!res.ok) caps.localApiWriteMessage = await res.text().catch(() => res.statusText);
+  } catch (e) {
+    caps.localApiWrite = false;
+    caps.localApiWriteMessage = e instanceof Error ? e.message : String(e);
+  }
+
+  return caps;
 }
 
 // ── Better BibTeX ──

@@ -137,6 +137,18 @@ export interface ActiveLibrary {
   libraryType: string;
 }
 
+export interface RuntimeCapabilities {
+  localApiRead: boolean;
+  localApiWrite: boolean;
+  localConnector: boolean;
+  localBridge: boolean;
+  sqliteFallback: boolean;
+  localApiWriteStatus?: number;
+  localApiWriteMessage?: string;
+  localBridgeVersion?: string;
+  zoteroVersion?: string;
+}
+
 export interface AttachmentRow {
   parentKey: string;
   attachmentKey: string;

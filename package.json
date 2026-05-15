@@ -1,14 +1,16 @@
 {
   "name": "zotero-mcp",
-  "version": "3.1.0",
+  "version": "3.2.0",
   "description": "MCP server + CLI for Zotero local library with PaddleOCR integration",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "zotero": "./dist/cli.js"
+    "zotero_manager": "./dist/cli.js"
   },
   "scripts": {
     "build": "tsc",
+    "plugin:pack": "mkdir -p dist-plugin && rm -f dist-plugin/zotero-mcp-local-bridge.xpi && cd zotero-local-bridge && zip -q -r ../dist-plugin/zotero-mcp-local-bridge.xpi manifest.json bootstrap.js",
+    "smoke:local-crud": "npm run build && node scripts/smoke-local-crud.mjs",
     "start": "node dist/index.js",
     "cli": "node dist/cli.js",
     "dev": "tsx src/index.ts",

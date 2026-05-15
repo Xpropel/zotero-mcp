@@ -76,7 +76,7 @@ export function registerOrganizeTools(server: McpServer): void {
 
   server.tool(
     "zotero_batch_tags",
-    "Batch add or remove tags on items matching a search query. Requires Zotero Web API for writes; without it shows a preview.",
+    "Batch add or remove tags on items matching a search query. Requires the Zotero MCP Local Bridge plugin for writes; without it shows a preview.",
     {
       query: z.string().describe("Search query to find items"),
       add_tags: z.array(z.string()).optional().describe("Tags to add"),
@@ -92,7 +92,7 @@ export function registerOrganizeTools(server: McpServer): void {
         const items = await zot.searchItems(query, { qmode: "titleCreatorYear", itemType: "-attachment", limit });
         if (!items.length) return ok(`No items found matching: ${query}`);
 
-        if (zot.hasWebApi()) {
+        if (await zot.hasLocalBridge()) {
           let updated = 0;
           const errors: string[] = [];
           for (const item of items) {
@@ -123,7 +123,7 @@ export function registerOrganizeTools(server: McpServer): void {
         }
 
         const lines = [
-          `# Batch Tag Update (Preview — Web API required for writes)`,
+          `# Batch Tag Update (Preview — Local Bridge plugin required for writes)`,
           `- **Query:** ${query}`,
           `- **Items matched:** ${items.length}`,
         ];
@@ -133,6 +133,84 @@ export function registerOrganizeTools(server: McpServer): void {
         for (const item of items) {
           const cur = (item.data.tags ?? []).map((t) => t.tag).join(", ") || "(none)";
           lines.push(`- ${item.data.title || "Untitled"} [${item.key}] — tags: ${cur}`);
+        }
+        return ok(lines.join("\n"));
+      } catch (e) { return fail(e); }
+    }
+  );
+
+  server.tool(
+    "zotero_manage_tags",
+    "Rename, merge, or delete a tag across matching local Zotero items. Requires the Zotero MCP Local Bridge plugin for writes.",
+    {
+      action: z.enum(["rename", "merge", "delete"]).describe("Action to perform"),
+      old_tag: z.string().describe("Existing tag to modify"),
+      new_tag: z.string().optional().describe("New tag for rename/merge actions"),
+      limit: z.number().default(500).describe("Maximum tagged items to process"),
+      confirm: z.boolean().default(false).describe("Required true to perform writes"),
+    },
+    async ({ action, old_tag, new_tag, limit, confirm }) => {
+      try {
+        if ((action === "rename" || action === "merge") && !new_tag) {
+          return fail(new Error("new_tag is required for rename/merge actions"));
+        }
+
+        const items = await zot.getItemsByTag(old_tag, limit);
+        if (!items.length) return ok(`No items found with tag: ${old_tag}`);
+
+        if (!confirm) {
+          const lines = [
+            "# Tag Management Preview",
+            `- **Action:** ${action}`,
+            `- **Old tag:** ${old_tag}`,
+            new_tag ? `- **New tag:** ${new_tag}` : "",
+            `- **Matched items:** ${items.length}`,
+            "",
+            "Run again with confirm=true to apply this change.",
+            "",
+            "## Matched Items",
+          ].filter(Boolean);
+          for (const item of items.slice(0, 30)) {
+            lines.push(`- [${item.key}] ${item.data.title || "Untitled"} (${item.data.itemType})`);
+          }
+          if (items.length > 30) lines.push(`- ... and ${items.length - 30} more`);
+          return ok(lines.join("\n"));
+        }
+
+        let updated = 0;
+        const errors: string[] = [];
+        for (const item of items) {
+          try {
+            const seen = new Set<string>();
+            const nextTags = [];
+            for (const tagObj of item.data.tags ?? []) {
+              let tag = tagObj.tag;
+              if (tag === old_tag) {
+                if (action === "delete") continue;
+                tag = new_tag as string;
+              }
+              if (seen.has(tag)) continue;
+              seen.add(tag);
+              nextTags.push({ ...tagObj, tag });
+            }
+            await zot.updateItemFields(item.key, { tags: nextTags });
+            updated++;
+          } catch (e) {
+            errors.push(`${item.key}: ${errorMessage(e)}`);
+          }
+        }
+
+        const lines = [
+          "# Tag Management",
+          `- **Action:** ${action}`,
+          `- **Old tag:** ${old_tag}`,
+          new_tag ? `- **New tag:** ${new_tag}` : "",
+          `- **Matched items:** ${items.length}`,
+          `- **Updated items:** ${updated}`,
+        ].filter(Boolean);
+        if (errors.length) {
+          lines.push("", "## Errors");
+          for (const err of errors) lines.push(`- ${err}`);
         }
         return ok(lines.join("\n"));
       } catch (e) { return fail(e); }

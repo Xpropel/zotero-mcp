@@ -13,7 +13,7 @@ async function main() {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  process.stderr.write(`Zotero MCP v${VERSION} started (18 tools, stdio)\n`);
+  process.stderr.write(`Zotero MCP v${VERSION} started (25 tools, stdio)\n`);
 }
 
 main().catch((err) => {

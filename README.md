@@ -1,223 +1,212 @@
-# Zotero MCP Server v3.1
+# Zotero MCP Server v3.2
 
-A [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server + CLI that connects AI assistants to your local Zotero library. Search, read, import, annotate, and manage your references through natural language.
+Local-first Zotero MCP server and CLI. It reads from Zotero Desktop's local API
+and performs local CRUD writes through a small Zotero Desktop plugin included in
+this repo.
 
 ## Highlights
 
-- **18 MCP tools** for LLM-driven literature management
-- **16 CLI commands** for terminal-based workflows
-- **DOI import** with OA PDF auto-download (Unpaywall / Semantic Scholar / PubMed Central)
-- **PaddleOCR integration** for PDF-to-Markdown/JSON/TXT conversion
-- **Full-text reading** directly in LLM context (auto-selects MD > TXT > Zotero index)
-- **Advanced search** with year range, item type, tag filtering, sort control
-- **Duplicate detection** by DOI and title similarity
-- **Collection management** (create, add/remove items)
-- **BibTeX export** via Better BibTeX or built-in fallback
+- 25 MCP tools for search, reading, OCR, import, notes, attachments, collections, tags, export, and CRUD management
+- 16 CLI commands for local terminal workflows
+- Local CRUD bridge plugin for create/update/delete items, notes, collections, and collection membership
+- Mature local management workflows: note update/append/delete, attachment import/link/update/delete, tag rename/merge/delete, collection copy/move
+- SQLite read-only fallback when the Zotero local API is unavailable
+- PaddleOCR integration for PDF-to-Markdown/JSON/TXT conversion
+- DOI import with CrossRef metadata and optional OA PDF lookup
+- BibTeX export via Better BibTeX or built-in fallback
 
-## Quick Start
+## Architecture
+
+```
+AI client / CLI
+      |
+      v
+src/index.ts, src/cli.ts
+      |
+      v
+src/zotero-client.ts
+      |------------------------------|
+      v                              v
+Zotero local API                 Zotero MCP Local Bridge plugin
+127.0.0.1:23119/api             127.0.0.1:23119/mcp-bridge/*
+read-only local data            local CRUD via Zotero internal APIs
+```
+
+The built-in Zotero local REST API is reliable for reads but does not implement
+item CRUD writes. This project therefore ships `zotero-local-bridge`, a Zotero
+Desktop plugin that exposes a narrow local endpoint prefix:
+
+```
+/mcp-bridge/ping
+/mcp-bridge/items/create
+/mcp-bridge/items/update
+/mcp-bridge/items/delete
+/mcp-bridge/collections/create
+/mcp-bridge/collections/update
+/mcp-bridge/collections/delete
+/mcp-bridge/collections/add-items
+/mcp-bridge/collections/remove-items
+/mcp-bridge/attachments/import-file
+/mcp-bridge/attachments/link-file
+/mcp-bridge/attachments/link-url
+```
+
+No Zotero cloud credentials are required for CRUD. Direct SQLite writes are not
+used.
+
+## Install
 
 ```bash
-git clone https://github.com/Xpropel/zotero-mcp.git
-cd zotero-mcp
 npm install
 npm run build
 ```
 
-### MCP Client (Claude Desktop / Cherry Studio / Cursor)
+### Install the Zotero bridge plugin
+
+Package the plugin:
+
+```bash
+npm run plugin:pack
+```
+
+Then install `dist-plugin/zotero-mcp-local-bridge.xpi` in Zotero Desktop:
+
+1. Open Zotero.
+2. Open `Tools -> Add-ons`.
+3. Choose `Install Add-on From File...`.
+4. Select `dist-plugin/zotero-mcp-local-bridge.xpi`.
+5. Restart Zotero if the endpoint is not active immediately.
+
+Verify:
+
+```bash
+curl -sS -H 'Zotero-Allowed-Request: 1' \
+  http://127.0.0.1:23119/mcp-bridge/ping
+
+npm run dev:cli -- status
+```
+
+Expected bridge response:
+
+```json
+{"ok":true,"result":{"version":"0.2.0","zoteroVersion":"9.0.3","userLibraryID":1}}
+```
+
+## MCP Client Configuration
 
 ```json
 {
   "mcpServers": {
     "zotero": {
       "command": "node",
-      "args": ["/absolute/path/to/zotero-mcp/dist/index.js"],
-      "env": {
-        "ZOTERO_API_KEY": "your-api-key",
-        "ZOTERO_LIBRARY_ID": "your-library-id"
-      }
+      "args": ["/absolute/path/to/zotero-mcp/dist/index.js"]
     }
   }
 }
 ```
 
-### CLI
+Development mode:
 
-```bash
-node dist/cli.js search "machine learning" -y 2023-2025 -n 10
-node dist/cli.js item ABC12345
-node dist/cli.js ocr ABC12345 -f md
-node dist/cli.js fulltext ABC12345
-node dist/cli.js add 10.1038/s41586-024-07487-w
-node dist/cli.js duplicates
+```json
+{
+  "mcpServers": {
+    "zotero": {
+      "command": "npx",
+      "args": ["tsx", "/absolute/path/to/zotero-mcp/src/index.ts"]
+    }
+  }
+}
 ```
-
-## Prerequisites
-
-- **Zotero 7** (or 6) running locally with default API on port `23119`
-- **Node.js** >= 18
-- *(Optional)* [Better BibTeX](https://retorque.re/zotero-better-bibtex/) for enhanced BibTeX export
-- *(Recommended)* Zotero Web API credentials for write operations (import, notes, tags, collections)
 
 ## Environment Variables
 
 | Variable | Required | Description |
-|---|---|---|
-| `ZOTERO_API_KEY` | For writes | [Zotero API key](https://www.zotero.org/settings/keys/new) with read/write access |
-| `ZOTERO_LIBRARY_ID` | With API key | Your Zotero user ID |
-| `ZOTERO_LIBRARY_TYPE` | No | `user` (default) or `group` |
+|---|---:|---|
 | `ZOTERO_DATA_DIR` | No | Override auto-detected Zotero data directory |
-| `ZOTERO_NOTES_WRITE_MODE` | No | `auto` (default) / `local` / `web` |
-| `PADDLEOCR_API_URL` | No | Custom PaddleOCR API endpoint |
+| `ZOTERO_FORCE_SQLITE` | No | Set `1` to force read-only SQLite fallback |
+| `ZOTERO_DISABLE_SQLITE_FALLBACK` | No | Set `1` to fail instead of using SQLite fallback |
+| `PADDLEOCR_API_URL` | No | Custom PaddleOCR endpoint |
 | `PADDLEOCR_TOKEN` | No | Custom PaddleOCR auth token |
-| `UNPAYWALL_EMAIL` | No | Email for Unpaywall API polite pool |
+| `UNPAYWALL_EMAIL` | No | Email for Unpaywall polite pool during DOI import |
 
-## MCP Tools (18)
+## MCP Tools
 
-### Search & Browse
-
-| Tool | Description |
+| Area | Tools |
 |---|---|
-| `zotero_search` | Advanced search with keyword, tags, collection, year range, item type, sort |
-| `zotero_recent` | Recently added items (with optional day filter) |
+| Search | `zotero_search`, `zotero_recent` |
+| Read | `zotero_item`, `zotero_fulltext`, `zotero_ocr`, `zotero_save_txt` |
+| Import/write | `zotero_add`, `zotero_create_item`, `zotero_create_note`, `zotero_update`, `zotero_delete_items` |
+| Notes and attachments | `zotero_search_notes`, `zotero_manage_notes`, `zotero_manage_attachments` |
+| Organize | `zotero_collections`, `zotero_tags`, `zotero_batch_tags`, `zotero_manage_tags`, `zotero_manage_collections`, `zotero_move_items`, `zotero_duplicates` |
+| Export/library | `zotero_export`, `zotero_capabilities`, `zotero_libraries`, `zotero_feeds` |
 
-### Read & Analyze
-
-| Tool | Description |
-|---|---|
-| `zotero_item` | Comprehensive item details: metadata, abstract, files (PDF/MD/TXT), notes, annotations |
-| `zotero_fulltext` | Read full text for LLM analysis (auto-selects MD > TXT > Zotero index) |
-| `zotero_ocr` | Convert PDF to Markdown/JSON/TXT via PaddleOCR |
-| `zotero_save_txt` | Save text alongside PDF in Zotero storage |
-
-### Import & Write
-
-| Tool | Description |
-|---|---|
-| `zotero_add` | Import by DOI with CrossRef metadata + OA PDF auto-download |
-| `zotero_create_note` | Create child note on an item |
-| `zotero_update` | Update item metadata (title, DOI, abstract, tags, etc.) |
-
-### Organize
-
-| Tool | Description |
-|---|---|
-| `zotero_collections` | List collection tree or browse items in a collection |
-| `zotero_tags` | List all tags by usage count |
-| `zotero_batch_tags` | Batch add/remove tags on search results |
-| `zotero_manage_collections` | Create collections, add/remove items |
-| `zotero_duplicates` | Find duplicate items by DOI or title similarity |
-
-### Export & Library
-
-| Tool | Description |
-|---|---|
-| `zotero_export` | Export items as BibTeX |
-| `zotero_search_notes` | Search note contents across library |
-| `zotero_libraries` | List/switch libraries |
-| `zotero_feeds` | Browse RSS feed items |
-
-## CLI Commands (16)
+## CLI Commands
 
 ```
 search [query]         Search with filters (-t tags, -y year, -T type, -s sort)
 item <key>             Item details with file indicators
 fulltext <key>         Read full text (MD > TXT > index)
 ocr <key>              PaddleOCR conversion (-f md|json|txt)
-add <dois...>          DOI import with OA PDF download
+add <dois...>          DOI import with optional OA PDF download
 recent                 Recently added items (-d days)
 duplicates             Detect duplicates (-c collection)
 notes <query>          Search notes
-note <key> <content>   Create note
+note <key> <content>   Create child note through the local bridge
 collections [key]      Browse collection tree
 tags                   List all tags
 tag <query>            Batch tag update (-a add, -r remove)
 export <keys...>       Export BibTeX
-libraries              List libraries & feeds
+libraries              List libraries and feeds
 feeds <id>             RSS feed items
 status                 System status check
 ```
 
-## Architecture
+## Source Layout
 
 ```
 src/
-├── index.ts            Entry point + lifecycle
-├── server.ts           18 tool registration
-├── cli.ts              CLI with 16 commands
-├── zotero-client.ts    HTTP client (local + Web API + Connector)
-├── doi-import.ts       CrossRef metadata + OA PDF cascade
-├── paddle-ocr.ts       PaddleOCR API integration
-├── local-db.ts         SQLite access (read-only copy)
-├── sql-fallback.ts     SQL queries when API unavailable
-├── bibtex.ts           BibTeX generation
-├── formatters.ts       Response formatting + suggested_next
-├── types.ts            TypeScript interfaces
-├── utils.ts            Helpers (paths, HTML, files)
-└── tools/
-    ├── search.ts       zotero_search, zotero_recent
-    ├── item.ts         zotero_item, zotero_save_txt
-    ├── fulltext.ts     zotero_fulltext
-    ├── ocr.ts          zotero_ocr
-    ├── import.ts       zotero_add
-    ├── notes.ts        zotero_search_notes, zotero_create_note
-    ├── organize.ts     zotero_collections, zotero_tags, zotero_batch_tags
-    ├── manage.ts       zotero_duplicates, zotero_manage_collections, zotero_update
-    ├── export.ts       zotero_export
-    └── library.ts      zotero_libraries, zotero_feeds
+├── index.ts            MCP stdio entry point
+├── server.ts           25 tool registrations
+├── cli.ts              CLI entry point
+├── zotero-client.ts    Local API + bridge client facade
+├── local-bridge.ts     HTTP client for /mcp-bridge endpoints
+├── local-db.ts         SQLite read-only metadata access
+├── sql-fallback.ts     SQLite read-only item queries
+├── doi-import.ts       CrossRef metadata + OA PDF lookup
+├── paddle-ocr.ts       PaddleOCR integration
+└── tools/              MCP tool modules
+
+zotero-local-bridge/
+├── manifest.json       Zotero plugin manifest
+└── bootstrap.js        Local CRUD endpoint implementation
 ```
 
-### Data Access
+## Data Access Boundaries
 
-1. **Local Zotero API** (`localhost:23119`) — primary read, no auth
-2. **Zotero Web API** (`api.zotero.org`) — writes (import, notes, tags, collections)
-3. **SQLite fallback** (`better-sqlite3`) — when API unavailable
-4. **CrossRef API** — DOI metadata resolution
-5. **Unpaywall / Semantic Scholar / PMC** — OA PDF discovery
-6. **PaddleOCR API** — PDF layout analysis + OCR
+| Layer | Purpose | Mutates Zotero data |
+|---|---|---:|
+| Zotero local API (`/api`) | Primary item, collection, tag, note reads | No |
+| Zotero MCP Local Bridge (`/mcp-bridge`) | Local item/note/collection/attachment CRUD | Yes |
+| SQLite fallback | Read-only fallback and library/feed metadata | No |
+| CrossRef / OA PDF lookup | Optional DOI import metadata and PDF discovery | Creates only after bridge write |
+| PaddleOCR | Optional OCR service for PDF text extraction | Saves text files locally |
 
-### OA PDF Download Cascade
+## Smoke Test
 
-When importing via DOI, the system attempts to find and download an open-access PDF:
-
-```
-Unpaywall → Semantic Scholar (+ arXiv) → PubMed Central → CrossRef links
-```
-
-If direct HTTP download is blocked by CDN (Cloudflare/Akamai), the PDF URL is saved as a linked attachment.
-
-## Scripts
+After installing the plugin and building:
 
 ```bash
-npm run build      # Compile TypeScript
-npm start          # Run MCP server
-npm run cli        # Run CLI
-npm run dev        # Development mode (tsx)
-npm run dev:cli    # CLI development mode
+npm run build
+npm run plugin:pack
+npm run dev:cli -- status
+npm run dev:cli -- search "" -n 3
+npm run smoke:local-crud
 ```
 
-## Changelog
-
-### v3.1.0
-
-- DOI import with OA PDF auto-download (Unpaywall/S2/PMC cascade)
-- Full-text reading tool (auto-select MD > TXT > Zotero index)
-- PaddleOCR integration (PDF to MD/JSON/TXT)
-- Advanced search (year range, item type filter, sort direction)
-- Duplicate detection (DOI + title matching)
-- Collection management (create, add/remove items)
-- Item metadata update
-- CLI with 16 commands
-- suggested_next dynamic hints
-
-### v2.0.0
-
-- Streamlined from 17 to 11 tools
-- Modular architecture refactor
-- SQLite fallback when API unavailable
-
-### v1.0.0
-
-- Initial release with search, item details, notes, collections, tags, export
+`npm run smoke:local-crud` runs a real Zotero integration test through MCP stdio:
+it creates temporary collections, an item, a note, imported and linked
+attachments, tags, and collection moves; then it verifies the results through
+Zotero's local API and permanently deletes only the temporary smoke-test data.
 
 ## License
 
