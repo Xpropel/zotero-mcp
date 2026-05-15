@@ -44,19 +44,19 @@ function shortAuthors(creators?: Array<{ firstName?: string; lastName?: string; 
 export function suggestNext(context: string): string {
   const hints: Record<string, string> = {
     search:
-      "**suggested_next:** `zotero_item` 查看文件库存 -> `zotero_files` action=read 读取 MD/TXT -> `zotero_files` action=ocr 转换 PDF",
+      "**suggested_next:** `zotero_item` 查看文件库存 -> `zotero_texts` action=read 读取 MD/TXT -> `zotero_texts` action=ocr 转换 PDF",
     item:
-      "**suggested_next:** `zotero_files` action=read 读取 MD/TXT -> `zotero_notes` action=create 保存笔记 -> `zotero_files` action=write_text 补充 MD/TXT",
+      "**suggested_next:** `zotero_texts` action=read 读取 MD/TXT -> `zotero_notes` action=create 保存笔记 -> `zotero_texts` action=write 补充 MD/TXT",
     item_no_ocr:
-      "**suggested_next:** `zotero_files` action=ocr 转换 PDF -> `zotero_files` action=write_text 保存 MD/TXT -> `zotero_files` action=read 读取文本",
+      "**suggested_next:** `zotero_texts` action=ocr 转换 PDF -> `zotero_texts` action=write 保存 MD/TXT -> `zotero_texts` action=read 读取文本",
     ocr:
-      "**suggested_next:** `zotero_files` action=read 读取 MD/TXT -> `zotero_notes` action=create 保存笔记",
+      "**suggested_next:** `zotero_texts` action=read 读取 MD/TXT -> `zotero_notes` action=create 保存笔记",
     note_created:
-      "**suggested_next:** `zotero_notes` action=search 搜索笔记 -> `zotero_export` 导出 BibTeX -> `zotero_tags` action=batch 批量打标签",
+      "**suggested_next:** `zotero_notes` action=search 搜索笔记 -> `zotero_export` 导出 BibTeX -> `zotero_tags` action=update_items 整理标签",
     export:
-      "**suggested_next:** `zotero_search` 查找更多文献 -> `zotero_tags` action=batch 整理标签",
+      "**suggested_next:** `zotero_search` 查找更多文献 -> `zotero_tags` action=update_items 整理标签",
     import:
-      "**suggested_next:** `zotero_item` 查看导入结果 -> `zotero_files` action=ocr 转换 PDF -> `zotero_collections` 整理到文件夹",
+      "**suggested_next:** `zotero_item` 查看导入结果 -> `zotero_texts` action=ocr 转换 PDF -> `zotero_collections` 整理到文件夹",
     read_file:
       "**suggested_next:** `zotero_notes` action=create 保存阅读笔记 -> `zotero_export` 导出 BibTeX",
   };

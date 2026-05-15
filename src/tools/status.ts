@@ -12,7 +12,7 @@ export function registerStatusTools(server: McpServer): void {
     {
       action: z.enum(["check", "libraries", "switch_library"]).default("check").describe("Action to perform"),
       library_id: z.number().optional().describe("Library ID for switch_library"),
-      library_type: z.enum(["user", "group"]).optional().describe("Library type for switch_library"),
+      library_type: z.enum(["user", "group"]).default("user").describe("Library type for switch_library"),
     },
     async ({ action, library_id, library_type }) => {
       try {
@@ -33,7 +33,7 @@ export function registerStatusTools(server: McpServer): void {
 
         if (action === "switch_library") {
           if (library_id === undefined) return fail(new Error("library_id is required for switch_library action"));
-          const lt = library_type ?? "group";
+          const lt = library_type;
           zot.setActiveLibrary(String(library_id), lt);
           try {
             const items = await zot.getItems({ limit: 1 });

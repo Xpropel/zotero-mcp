@@ -69,7 +69,7 @@ try {
   await client.connect(transport);
   const tools = await client.listTools();
   console.log(`tools: ${tools.tools.length}`);
-  if (tools.tools.length !== 9) throw new Error(`Expected 9 consolidated tools, got ${tools.tools.length}`);
+  if (tools.tools.length !== 11) throw new Error(`Expected 11 semantic tools, got ${tools.tools.length}`);
 
   const caps = await call("zotero_status", { action: "check" });
   if (!caps.includes("Local bridge plugin | yes")) throw new Error("Local bridge is not loaded");
@@ -136,8 +136,8 @@ try {
   }
   console.log("note update/append/list: ok");
 
-  const importedText = await call("zotero_files", {
-    action: "import_attachment",
+  const importedText = await call("zotero_attachments", {
+    action: "import",
     item_key: itemKey,
     file_path: importFile,
     title: "imported attachment smoke",
@@ -147,8 +147,8 @@ try {
   created.items.push(importedKey);
   console.log(`imported attachment: ${importedKey}`);
 
-  const linkedText = await call("zotero_files", {
-    action: "link_attachment",
+  const linkedText = await call("zotero_attachments", {
+    action: "link_file",
     item_key: itemKey,
     file_path: linkedFile,
     title: "linked attachment smoke",
@@ -158,14 +158,14 @@ try {
   created.items.push(linkedKey);
   console.log(`linked attachment: ${linkedKey}`);
 
-  await call("zotero_files", {
-    action: "update_attachment",
+  await call("zotero_attachments", {
+    action: "update",
     attachment_key: importedKey,
     title: "updated imported attachment smoke",
     tags: ["mcp-smoke-attachment"],
   });
-  await call("zotero_files", {
-    action: "write_text",
+  await call("zotero_texts", {
+    action: "write",
     item_key: itemKey,
     attachment_key: importedKey,
     format: "md",
@@ -175,17 +175,17 @@ try {
   if (!inventory.includes(importedKey) || !inventory.includes("| MD |")) {
     throw new Error("Item inventory did not report the imported attachment and MD file");
   }
-  const mdText = await call("zotero_files", {
+  const mdText = await call("zotero_texts", {
     action: "read",
     item_key: itemKey,
     attachment_key: importedKey,
     source: "md",
   });
   if (!mdText.includes("Readable markdown sidecar")) {
-    throw new Error("zotero_files action=read did not return the saved MD sidecar");
+    throw new Error("zotero_texts action=read did not return the saved MD sidecar");
   }
   console.log("file inventory/write/read: ok");
-  const attachments = await call("zotero_files", { action: "list", item_key: itemKey });
+  const attachments = await call("zotero_attachments", { action: "list", item_key: itemKey });
   if (!attachments.includes(importedKey) || !attachments.includes(linkedKey)) {
     throw new Error("Attachment list did not include both smoke attachments");
   }
@@ -195,7 +195,7 @@ try {
   console.log("attachment import/link/update/list: ok");
 
   await call("zotero_collections", {
-    action: "move_items",
+    action: "transfer_items",
     item_keys: [itemKey],
     source_collection_key: sourceKey,
     target_collection_key: targetKey,

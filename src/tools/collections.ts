@@ -6,18 +6,18 @@ import { ok, fail, fmtSearchList } from "../formatters.js";
 export function registerCollectionTools(server: McpServer): void {
   server.tool(
     "zotero_collections",
-    "List, inspect, create, rename, move, delete, and move/copy items between Zotero collections.",
+    "List, inspect, create, rename, move, delete, and transfer items between Zotero collections.",
     {
-      action: z.enum(["list", "items", "create", "rename", "move", "delete", "add_items", "remove_items", "move_items"]).default("list"),
+      action: z.enum(["list", "items", "create", "rename", "set_parent", "delete", "add_items", "remove_items", "transfer_items"]).default("list"),
       collection_key: z.string().optional().describe("Collection key for items/rename/move/delete/add/remove"),
       name: z.string().optional().describe("Collection name for create/rename"),
-      parent_key: z.string().optional().describe("Parent collection key for create/move"),
-      item_keys: z.array(z.string()).optional().describe("Item keys for add/remove/move_items"),
-      target_collection_key: z.string().optional().describe("Destination collection for move_items"),
-      source_collection_key: z.string().optional().describe("Source collection for move_items in move mode"),
-      mode: z.enum(["copy", "move"]).default("copy").describe("For move_items: copy or move"),
+      parent_key: z.string().optional().describe("Parent collection key for create/set_parent"),
+      item_keys: z.array(z.string()).optional().describe("Item keys for add/remove/transfer_items"),
+      target_collection_key: z.string().optional().describe("Destination collection for transfer_items"),
+      source_collection_key: z.string().optional().describe("Source collection for transfer_items in move mode"),
+      mode: z.enum(["copy", "move"]).default("copy").describe("For transfer_items: copy or move"),
       limit: z.number().default(50).describe("Max items when listing collection contents"),
-      confirm: z.boolean().default(false).describe("Required true for delete or move_items writes"),
+      confirm: z.boolean().default(false).describe("Required true for delete or transfer_items writes"),
     },
     async ({ action, collection_key, name, parent_key, item_keys, target_collection_key, source_collection_key, mode, limit, confirm }) => {
       try {
@@ -73,8 +73,8 @@ export function registerCollectionTools(server: McpServer): void {
           return ok(`Renamed collection [${collection_key}] to **${name}**`);
         }
 
-        if (action === "move") {
-          if (!collection_key) return fail(new Error("collection_key is required for move action"));
+        if (action === "set_parent") {
+          if (!collection_key) return fail(new Error("collection_key is required for set_parent action"));
           await zot.updateCollectionFields(collection_key, { parentCollection: parent_key || false });
           return ok(parent_key ? `Moved collection [${collection_key}] under [${parent_key}]` : `Moved collection [${collection_key}] to library root`);
         }
@@ -105,7 +105,7 @@ export function registerCollectionTools(server: McpServer): void {
         }
 
         if (!item_keys?.length || !target_collection_key) {
-          return fail(new Error("item_keys and target_collection_key are required for move_items action"));
+          return fail(new Error("item_keys and target_collection_key are required for transfer_items action"));
         }
         if (mode === "move" && !source_collection_key) {
           return fail(new Error("source_collection_key is required for move mode"));

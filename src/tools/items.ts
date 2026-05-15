@@ -1,10 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { join } from "node:path";
 import * as zot from "../zotero-client.js";
-import { getCrossRefMeta, findOaPdf, downloadPdf, metaToZoteroPayload } from "../doi-import.js";
 import { errorMessage } from "../utils.js";
-import { ok, fail, suggestNext } from "../formatters.js";
+import { ok, fail } from "../formatters.js";
 
 function inputItemKeys(itemKey?: string, itemKeys?: string[]): string[] {
   const keys = itemKeys?.length ? itemKeys : itemKey ? [itemKey] : [];
@@ -44,9 +42,9 @@ function commonFieldPatch(args: {
 export function registerItemManagementTools(server: McpServer): void {
   server.tool(
     "zotero_items",
-    "Create, import, update, delete, or check duplicates for Zotero items. Local writes require the Zotero MCP Local Bridge plugin.",
+    "Create, update, delete, or check duplicate Zotero item records. Use zotero_import for DOI-based imports.",
     {
-      action: z.enum(["create", "update", "delete", "import_doi", "duplicates"]).describe("Action to perform"),
+      action: z.enum(["create", "update", "delete", "duplicates"]).describe("Action to perform"),
       item_key: z.string().optional().describe("Single item key for update/delete"),
       item_keys: z.array(z.string()).optional().describe("Item keys for delete"),
       item_type: z.string().default("journalArticle").describe("Zotero item type for create"),
@@ -59,19 +57,17 @@ export function registerItemManagementTools(server: McpServer): void {
       })).optional().describe("Creators for create"),
       fields: z.record(z.any()).optional().describe("Additional Zotero fields for create/update"),
       collection_keys: z.array(z.string()).optional().describe("Collections for create"),
-      collection_key: z.string().optional().describe("Collection for DOI import or duplicate scan scope"),
-      tags: z.array(z.string()).optional().describe("Tags for create/update/import; update replaces item tags"),
+      collection_key: z.string().optional().describe("Collection key for duplicate scan scope"),
+      tags: z.array(z.string()).optional().describe("Tags for create/update; update replaces item tags"),
       date: z.string().optional().describe("Date field for update"),
       abstract: z.string().optional().describe("Abstract for update"),
-      doi: z.string().optional().describe("Single DOI for import_doi or DOI field for update"),
-      dois: z.array(z.string()).optional().describe("Multiple DOIs for import_doi"),
+      doi: z.string().optional().describe("DOI field for update"),
       url: z.string().optional().describe("URL for update"),
       journal: z.string().optional().describe("Journal/publication title for update"),
       volume: z.string().optional().describe("Volume for update"),
       issue: z.string().optional().describe("Issue for update"),
       pages: z.string().optional().describe("Pages for update"),
       extra: z.string().optional().describe("Extra field for update"),
-      download_pdf: z.boolean().default(true).describe("For import_doi: attempt to attach an OA PDF"),
       scope: z.enum(["all", "collection"]).default("all").describe("For duplicates: scan all or one collection"),
       limit: z.number().default(100).describe("For duplicates: max items to scan"),
       confirm: z.boolean().default(false).describe("Required true for delete"),
@@ -89,7 +85,6 @@ export function registerItemManagementTools(server: McpServer): void {
           if (args.creators?.length) payload.creators = args.creators;
           if (args.collection_keys?.length) payload.collections = args.collection_keys;
           if (args.tags?.length) payload.tags = args.tags.map((tag) => ({ tag }));
-
           const key = await zot.createItem(payload);
           return ok(
             `Item created: **${args.title}** [${key}]\n\n` +
@@ -132,67 +127,6 @@ export function registerItemManagementTools(server: McpServer): void {
           if (deleted.length) lines.push("", "## Deleted", ...deleted.map((item) => `- ${item}`));
           if (errors.length) lines.push("", "## Errors", ...errors.map((err) => `- ${err}`));
           return ok(lines.join("\n"));
-        }
-
-        if (args.action === "import_doi") {
-          const doiList = args.dois?.length ? args.dois : args.doi ? [args.doi] : [];
-          if (!doiList.length) return fail(new Error("doi or dois is required for import_doi action"));
-          const normalized = doiList.map((doi) => doi.match(/10\.\d{4,}\/[^\s]+/)?.[0] ?? doi);
-          const results: string[] = [];
-          let successCount = 0;
-          let pdfCount = 0;
-
-          for (const doi of normalized) {
-            const lines: string[] = [];
-            try {
-              const meta = await getCrossRefMeta(doi);
-              const payload = metaToZoteroPayload(meta, args.collection_key);
-              if (args.tags?.length) payload.tags = args.tags.map((tag) => ({ tag }));
-              const itemKey = await zot.createItem(payload);
-              successCount++;
-              lines.push(`**${meta.title}**`);
-              lines.push(`DOI: ${doi} | ${meta.itemType} | ${meta.year || "n.d."}`);
-              lines.push(`Zotero item created: [${itemKey}]`);
-
-              if (args.download_pdf) {
-                const pdfSource = await findOaPdf(doi);
-                if (!pdfSource) {
-                  lines.push("No OA PDF found");
-                } else {
-                  const tmpDir = join("/tmp", "zotero-mcp-pdf");
-                  const filename = `${doi.replace(/[/\\:]/g, "_")}.pdf`;
-                  const dl = await downloadPdf(pdfSource.url, tmpDir, filename);
-                  if (dl) {
-                    try {
-                      await zot.uploadAttachment(itemKey, dl.path, "application/pdf", filename);
-                      lines.push(`PDF attached (${(dl.size / 1024).toFixed(0)} KB)`);
-                      pdfCount++;
-                    } catch {
-                      await zot.createLinkedUrlAttachment(itemKey, pdfSource.url, `${meta.title}.pdf`);
-                      lines.push("PDF linked as URL after upload failed");
-                      pdfCount++;
-                    }
-                  } else {
-                    await zot.createLinkedUrlAttachment(itemKey, pdfSource.url, `${meta.title}.pdf`);
-                    lines.push("PDF linked as URL");
-                    pdfCount++;
-                  }
-                }
-              }
-            } catch (e) {
-              lines.push(`**Failed:** ${doi} - ${errorMessage(e)}`);
-            }
-            results.push(lines.join("\n"));
-          }
-
-          const header = [
-            "# Import Results",
-            `- **Total:** ${normalized.length}`,
-            `- **Items created:** ${successCount}`,
-            `- **PDFs attached:** ${pdfCount}`,
-            "",
-          ].join("\n");
-          return ok(header + results.join("\n\n") + "\n\n" + suggestNext("import"));
         }
 
         let items: Awaited<ReturnType<typeof zot.getItems>>;

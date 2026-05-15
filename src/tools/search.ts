@@ -8,7 +8,7 @@ export function registerSearchTools(server: McpServer): void {
   server.tool(
     "zotero_search",
     "Search Zotero library with practical filters. Returns a concise list with available PDF/MD/TXT file indicators. " +
-      "Use zotero_item for one item inventory and zotero_files action=read to read saved MD/TXT text.",
+      "Use zotero_item for one item inventory and zotero_texts action=read to read saved MD/TXT text.",
     {
       query: z.string().optional().describe("Search keyword (omit to browse all / filter by other criteria)"),
       tag: z.array(z.string()).optional().describe("Filter by tags (OR logic: matches any)"),
