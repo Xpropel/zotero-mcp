@@ -130,6 +130,15 @@ export function errorMessage(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+export function displayTitleFromFilePath(filePath: string, title?: string): string {
+  const fileName = basename(filePath);
+  const explicit = title?.trim();
+  if (explicit && explicit !== fileName) return explicit;
+  const ext = extname(fileName);
+  if (!ext) return explicit || fileName;
+  return basename(fileName, ext) || explicit || fileName;
+}
+
 export function getStorageDir(attachmentKey: string): string {
   return join(findZoteroDataDir(), "storage", attachmentKey);
 }

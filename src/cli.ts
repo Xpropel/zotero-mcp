@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Zotero CLI v3.5 — 命令行工具，直接操作本地 Zotero 文献库
+ * Zotero CLI v3.5.1 — 命令行工具，直接操作本地 Zotero 文献库
  *
  * 命令：
  *   search      搜索文献
@@ -61,8 +61,8 @@ function shortAuthors(creators?: Array<{ firstName?: string; lastName?: string; 
 const program = new Command();
 program
   .name("zotero_manager")
-  .description("Zotero 文献库命令行工具 v3.5")
-  .version("3.5.0");
+  .description("Zotero 文献库命令行工具 v3.5.1")
+  .version("3.5.1");
 
 // ── search ──
 program

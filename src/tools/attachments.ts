@@ -1,9 +1,10 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { existsSync, statSync } from "node:fs";
-import { basename, extname } from "node:path";
+import { extname } from "node:path";
 import * as zot from "../zotero-client.js";
 import { ok, fail } from "../formatters.js";
+import { displayTitleFromFilePath } from "../utils.js";
 
 function guessContentType(pathOrUrl: string, fallback = "application/octet-stream"): string {
   const ext = extname(pathOrUrl).toLowerCase();
@@ -25,7 +26,7 @@ export function registerAttachmentTools(server: McpServer): void {
       attachment_key: z.string().optional().describe("Attachment item key for update/delete"),
       file_path: z.string().optional().describe("Local file path for import or link_file"),
       url: z.string().optional().describe("URL for link_url"),
-      title: z.string().optional().describe("Attachment title"),
+      title: z.string().optional().describe("Attachment display title. Defaults to the file name without extension."),
       content_type: z.string().optional().describe("MIME type; inferred for common extensions when omitted"),
       tags: z.array(z.string()).optional().describe("Replacement attachment tags for update"),
       confirm: z.boolean().default(false).describe("Required true for delete"),
@@ -49,7 +50,7 @@ export function registerAttachmentTools(server: McpServer): void {
           if (!file_path) return fail(new Error("file_path is required for file attachment actions"));
           if (!existsSync(file_path)) return fail(new Error(`File not found: ${file_path}`));
           if (!statSync(file_path).isFile()) return fail(new Error(`Not a file: ${file_path}`));
-          const finalTitle = title || basename(file_path);
+          const finalTitle = displayTitleFromFilePath(file_path, title);
           const finalContentType = content_type || guessContentType(file_path);
           const key = action === "import"
             ? await zot.uploadAttachment(item_key, file_path, finalContentType, finalTitle)

@@ -8,8 +8,10 @@ const cwd = process.cwd();
 const tempDir = mkdtempSync(join(tmpdir(), "zotero-mcp-smoke-"));
 const importFile = join(tempDir, "imported-note.txt");
 const linkedFile = join(tempDir, "linked-note.txt");
+const localImportPdf = join(tempDir, "local-import-smoke.pdf");
 writeFileSync(importFile, "zotero mcp imported attachment smoke\n");
 writeFileSync(linkedFile, "zotero mcp linked attachment smoke\n");
+writeFileSync(localImportPdf, "%PDF-1.3\n% zotero mcp smoke pdf\n");
 
 const transport = new StdioClientTransport({ command: "node", args: ["dist/index.js"], cwd });
 const client = new Client({ name: "zotero-mcp-local-crud-smoke", version: "0.0.0" });
@@ -193,6 +195,24 @@ try {
     throw new Error("Attachment update not visible in list");
   }
   console.log("attachment import/link/update/list: ok");
+
+  const localImportText = await call("zotero_import", {
+    file_path: localImportPdf,
+    collection_key: sourceKey,
+  });
+  const localImportItemKey = parseKey(localImportText);
+  created.items.push(localImportItemKey);
+  const localImportItem = await call("zotero_item", { item_key: localImportItemKey });
+  const localImportAttachmentKey = localImportItem.match(/\| \[([A-Z0-9]{8})\] local-import-smoke \|/)?.[1];
+  if (!localImportAttachmentKey) throw new Error("Could not parse local import attachment key");
+  created.items.push(localImportAttachmentKey);
+  if (!localImportItem.includes("# local-import-smoke") || localImportItem.includes("# local-import-smoke.pdf")) {
+    throw new Error("Local file import did not strip the .pdf suffix from the item title");
+  }
+  if (!localImportItem.includes("] local-import-smoke | yes |")) {
+    throw new Error("Local file import did not strip the .pdf suffix from the attachment title");
+  }
+  console.log("local file import title cleanup: ok");
 
   await call("zotero_collections", {
     action: "transfer_items",

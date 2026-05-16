@@ -11,7 +11,7 @@ import { registerStatusTools } from "./tools/status.js";
 import { registerItemManagementTools } from "./tools/items.js";
 import { registerImportTools } from "./tools/import.js";
 
-export const VERSION = "3.5.0";
+export const VERSION = "3.5.1";
 export const server = new McpServer({ name: "Zotero", version: VERSION });
 
 // 11 semantic tools. Parameters stay scoped to one Zotero object boundary.

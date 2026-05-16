@@ -1,24 +1,64 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { join } from "node:path";
+import { existsSync, statSync } from "node:fs";
+import { join, extname } from "node:path";
 import * as zot from "../zotero-client.js";
 import { getCrossRefMeta, findOaPdf, downloadPdf, metaToZoteroPayload } from "../doi-import.js";
-import { errorMessage } from "../utils.js";
+import { displayTitleFromFilePath, errorMessage } from "../utils.js";
 import { ok, fail, suggestNext } from "../formatters.js";
+
+function guessContentType(pathOrUrl: string, fallback = "application/octet-stream"): string {
+  const ext = extname(pathOrUrl).toLowerCase();
+  if (ext === ".pdf") return "application/pdf";
+  if (ext === ".txt") return "text/plain";
+  if (ext === ".html" || ext === ".htm") return "text/html";
+  if (ext === ".md") return "text/markdown";
+  if (ext === ".epub") return "application/epub+zip";
+  return fallback;
+}
 
 export function registerImportTools(server: McpServer): void {
   server.tool(
     "zotero_import",
-    "Import references into Zotero. Currently supports DOI metadata import with optional OA PDF attachment.",
+    "Import references into Zotero. Supports DOI metadata import and minimal local file import with optional attachment.",
     {
       doi: z.string().optional().describe("Single DOI to import"),
       dois: z.array(z.string()).optional().describe("Multiple DOIs to import"),
+      file_path: z.string().optional().describe("Local file to import without metadata lookup"),
+      title: z.string().optional().describe("Display title for local file import. Defaults to the file name without extension."),
+      item_type: z.string().default("document").describe("Zotero item type for local file import"),
+      content_type: z.string().optional().describe("MIME type for local file import; inferred when omitted"),
       collection_key: z.string().optional().describe("Collection key to add imported items to"),
       tags: z.array(z.string()).optional().describe("Tags to add to imported items"),
       download_pdf: z.boolean().default(true).describe("Attempt to download or link an OA PDF"),
     },
-    async ({ doi, dois, collection_key, tags, download_pdf }) => {
+    async ({ doi, dois, file_path, title, item_type, content_type, collection_key, tags, download_pdf }) => {
       try {
+        if (file_path) {
+          if (!existsSync(file_path)) return fail(new Error(`File not found: ${file_path}`));
+          if (!statSync(file_path).isFile()) return fail(new Error(`Not a file: ${file_path}`));
+          const finalTitle = displayTitleFromFilePath(file_path, title);
+          const payload: Record<string, unknown> = {
+            itemType: item_type,
+            title: finalTitle,
+          };
+          if (collection_key) payload.collections = [collection_key];
+          if (tags?.length) payload.tags = tags.map((tag) => ({ tag }));
+          const itemKey = await zot.createItem(payload);
+          const attachmentKey = await zot.uploadAttachment(
+            itemKey,
+            file_path,
+            content_type || guessContentType(file_path),
+            finalTitle
+          );
+          return ok(
+            "# Local File Import\n" +
+              `- **Item:** ${finalTitle} [${itemKey}]\n` +
+              `- **Attachment:** ${finalTitle} [${attachmentKey}]\n` +
+              `- **File:** ${file_path}`
+          );
+        }
+
         const doiList = dois?.length ? dois : doi ? [doi] : [];
         if (!doiList.length) return fail(new Error("doi or dois is required"));
         const normalized = doiList.map((value) => value.match(/10\.\d{4,}\/[^\s]+/)?.[0] ?? value);

@@ -1,7 +1,7 @@
-# Zotero MCP Server v3.5
+# Zotero MCP Server v3.5.1
 
 Local-first Zotero MCP server and CLI for managing a real Zotero Desktop
-library. v3.5 favors semantic tool boundaries over forced consolidation: each
+library. v3.5.1 favors semantic tool boundaries over forced consolidation: each
 tool maps to one Zotero object or workflow, with cleaner parameters.
 
 ## What This Tool Is For
@@ -59,7 +59,7 @@ npm run dev:cli -- status
 
 ## MCP Tools
 
-The v3.5 interface exposes 11 semantic tools.
+The v3.5.1 interface exposes 11 semantic tools.
 
 | Tool | Actions | Purpose |
 |---|---|---|
@@ -67,8 +67,8 @@ The v3.5 interface exposes 11 semantic tools.
 | `zotero_search` | filtered search | Find candidate items with PDF/MD/TXT indicators |
 | `zotero_item` | single item read | Inspect metadata, file inventory, notes, and annotations |
 | `zotero_items` | `create`, `update`, `delete`, `duplicates` | Manage item records |
-| `zotero_import` | no action; DOI params | Import DOI metadata and optional OA PDF |
-| `zotero_attachments` | `list`, `import`, `link_file`, `link_url`, `update`, `delete` | Manage Zotero attachment records |
+| `zotero_import` | DOI params or `file_path` | Import DOI metadata or a local file without metadata lookup |
+| `zotero_attachments` | `list`, `import`, `link_file`, `link_url`, `update`, `delete` | Manage Zotero attachment records; local file display titles default to the file name without extension |
 | `zotero_texts` | `list`, `read`, `write`, `import`, `ocr` | Manage MD/TXT/JSON text representations for attachments |
 | `zotero_notes` | `list`, `search`, `create`, `update`, `append`, `delete` | Manage Zotero child notes |
 | `zotero_collections` | `list`, `items`, `create`, `rename`, `set_parent`, `delete`, `add_items`, `remove_items`, `transfer_items` | Browse and manage collections |

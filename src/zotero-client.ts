@@ -268,12 +268,12 @@ export async function uploadAttachment(
   parentKey: string,
   filePath: string,
   contentType: string,
-  filename: string
+  title: string
 ): Promise<string> {
   const created = await bridge.bridgePost<bridge.BridgeObjectResult>("/attachments/import-file", {
     parentKey,
     filePath,
-    title: filename,
+    title,
     contentType,
   }, activeLib);
   return created.key;
